@@ -18,20 +18,19 @@ function greatestCommonDivisor(a, b) {
   return a;
 }
 
-// Random lattice step (m, n), coprime, with random signs. The plain
-// diagonal (1, 1) is kept but made rarer, since it has no bounces.
-export function pickCornerStep(random = Math.random, maxStep = 3) {
-  for (;;) {
-    const m = 1 + Math.floor(random() * maxStep);
-    const n = 1 + Math.floor(random() * maxStep);
+// Every lattice step (m, n) with |m|, |n| <= 3, coprime, in all four
+// directions. Each one bounces |m|-1 + |n|-1 times, then hits a corner.
+const MAX_STEP = 3;
+export const CORNER_STEPS = [];
+for (let m = 1; m <= MAX_STEP; m++) {
+  for (let n = 1; n <= MAX_STEP; n++) {
     if (greatestCommonDivisor(m, n) !== 1) continue;
-    if (m === 1 && n === 1 && random() < 0.7) continue;
-    return {
-      m: random() < 0.5 ? -m : m,
-      n: random() < 0.5 ? -n : n,
-    };
+    for (const sx of [1, -1]) for (const sy of [1, -1]) CORNER_STEPS.push({ m: sx * m, n: sy * n });
   }
 }
+
+// The plain diagonal (1, 1) has no bounces, so it comes up less often.
+const stepWeight = (step) => (Math.abs(step.m) === 1 && Math.abs(step.n) === 1 ? 0.3 : 1);
 
 // Fractions of the way from u0 to u1 where the unfolded line crosses a
 // wall (a multiple of length), excluding both ends.
@@ -62,26 +61,47 @@ function nearestCornerApproach(run, width, height) {
 
 // No teases: a wall bounce may not land this close to a corner.
 export const NEAR_MISS_MARGIN = 0.25;
-const PLAN_ATTEMPTS = 60;
 
-// Plan the next run from unfolded point (x, y) to a corner. From a
-// non-corner start (a clicked-in logo, a resize) it heads for the nearest
-// lattice base plus the step, which still ends in a corner. Runs whose
-// bounces skim a corner are thrown out; from a corner, none ever do.
-export function planCornerRun(x, y, width, height, random = Math.random) {
-  let best;
-  for (let attempt = 0; attempt < PLAN_ATTEMPTS; attempt++) {
-    const step = pickCornerStep(random);
+// Every corner run from unfolded point (x, y). From a non-corner start (a
+// clicked-in logo, a resize) each heads for the nearest lattice base plus
+// the step, which still ends in a corner.
+function cornerRuns(x, y, width, height) {
+  return CORNER_STEPS.map((step) => {
     const x1 = (Math.round(x / width) + step.m) * width;
     const y1 = (Math.round(y / height) + step.n) * height;
     const bounces = [
       ...wallCrossingFractions(x, x1, width),
       ...wallCrossingFractions(y, y1, height),
     ].sort((a, b) => a - b);
-    const run = { x0: x, y0: y, x1, y1, length: Math.hypot(x1 - x, y1 - y), bounces };
+    const run = { x0: x, y0: y, x1, y1, length: Math.hypot(x1 - x, y1 - y), bounces, step };
     run.nearestApproach = nearestCornerApproach(run, width, height);
-    if (run.nearestApproach >= NEAR_MISS_MARGIN) return run;
-    if (!best || run.nearestApproach > best.nearestApproach) best = run;
+    return run;
+  });
+}
+
+// Runs whose bounces stay clear of every corner. From a corner that is all
+// of them. In the rare spot where none qualify, the clearest run is used.
+function clearRuns(x, y, width, height) {
+  const runs = cornerRuns(x, y, width, height);
+  const clear = runs.filter((run) => run.nearestApproach >= NEAR_MISS_MARGIN);
+  if (clear.length) return clear;
+  return [runs.reduce((a, b) => (b.nearestApproach > a.nearestApproach ? b : a))];
+}
+
+// A random clear run to a corner.
+export function planCornerRun(x, y, width, height, random = Math.random) {
+  const runs = clearRuns(x, y, width, height);
+  let ticket = random() * runs.reduce((sum, run) => sum + stepWeight(run.step), 0);
+  for (const run of runs) {
+    ticket -= stepWeight(run.step);
+    if (ticket < 0) return run;
   }
-  return best;
+  return runs.at(-1);
+}
+
+// Jackpot: for each start point, the clear run closest to `targetLength`,
+// so that moving them all on one shared clock looks even.
+export function planJackpotRuns(starts, width, height, targetLength) {
+  return starts.map(([x, y]) => clearRuns(x, y, width, height).reduce((best, run) =>
+    Math.abs(run.length - targetLength) < Math.abs(best.length - targetLength) ? run : best));
 }

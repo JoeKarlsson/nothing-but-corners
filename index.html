@@ -7,6 +7,12 @@
 <meta name="description" content="The DVD screensaver with the boring parts taken out. It hits the corner every time.">
 <meta property="og:title" content="Nothing But Corners">
 <meta property="og:description" content="The DVD screensaver with the boring parts taken out. It hits the corner every time.">
+<meta property="og:url" content="https://joekarlsson.github.io/nothing-but-corners/">
+<meta property="og:image" content="https://joekarlsson.github.io/nothing-but-corners/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&display=block" rel="stylesheet">
@@ -26,13 +32,19 @@
     user-select: none;
   }
   body.idle { cursor: none; }
-  #flash, #stage, #burst {
+  #flash, #stage, #burst, #banner {
     position: fixed;
     inset: 0;
     pointer-events: none;
   }
   #flash { opacity: 0; }
   #burst { width: 100%; height: 100%; }
+  #banner {
+    display: grid;
+    place-items: center;
+    font: clamp(64px, 15vw, 220px)/1 "Archivo Black", "Arial Black", sans-serif;
+    opacity: 0;
+  }
   .logo {
     position: absolute;
     top: 0;
@@ -46,22 +58,28 @@
     position: fixed;
     left: 16px;
     right: 16px;
-    bottom: 14px;
+    bottom: 10px;
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
+    align-items: center;
   }
-  #count { display: inline-block; transform-origin: left bottom; }
-  body.idle #osd button { visibility: hidden; }
-  #osd button {
-    font: inherit;
+  #count { display: inline-block; transform-origin: left center; }
+  #controls { display: flex; gap: 12px; }
+  body.idle #controls { visibility: hidden; }
+  #controls button {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
     color: inherit;
     background: none;
     border: 0;
-    padding: 4px 0;
     cursor: pointer;
   }
-  #osd button:focus-visible { outline: 2px solid var(--osd); outline-offset: 2px; }
+  #controls button[hidden] { display: none; }
+  #controls svg { width: 24px; height: 24px; }
+  #controls button:focus-visible { outline: 2px solid var(--osd); outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -88,16 +106,36 @@
 <div id="flash"></div>
 <div id="stage"></div>
 <canvas id="burst"></canvas>
+<div id="banner"><span id="banner-text"></span></div>
 <div id="osd">
   <span id="count" aria-live="polite">0 corners</span>
-  <button id="sound" type="button">Sound off</button>
+  <div id="controls">
+    <button id="sound" type="button" aria-label="Turn sound on" title="Sound (S)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 9h4l5-4v14l-5-4H3z"/><path class="icon-detail" d="M16 9l5 6M21 9l-5 6"/>
+      </svg>
+    </button>
+    <button id="fullscreen" type="button" aria-label="Full screen" title="Full screen (F)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path class="icon-detail" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>
+      </svg>
+    </button>
+  </div>
 </div>
 
 <script type="module">
-import { fold, planCornerRun } from "./path.js";
+import { fold, planCornerRun, planJackpotRuns } from "./path.js";
+import { brake as brakeCurve, pickDifferent, along } from "./motion.js";
 
 const COLORS = ["#ff4fd8", "#ff8a1f", "#ffe600", "#00e5ff", "#39ff6a", "#ff2b2b", "#ffffff"];
-const CHEERS = ["kids", "kids-yay", "applause", "yay"].map((name) => `sounds/cheer-${name}.mp3`);
+const SOUND_FILES = {
+  cheers: ["kids", "kids-yay", "applause", "yay"].map((name) => `sounds/cheer-${name}.mp3`),
+  jamWarble: "sounds/jam-warble.mp3",
+  jamStutter: "sounds/jam-stutter.mp3",
+  mergeWhoosh: "sounds/merge-whoosh.mp3",
+  giantHorn: "sounds/giant-horn.mp3",
+  giantImpact: "sounds/giant-impact.mp3",
+};
 // Cartoon timing: hold full speed, brake late and hard into the corner
 // (slow in), then snap out fast and settle back to cruising speed.
 const SLOWMO_WINDOW_SECONDS = 0.12;
@@ -106,32 +144,45 @@ const RICOCHET_BOOST = 1.9;
 const RICOCHET_SETTLE_SECONDS = 0.22;
 const MAX_FRAME_SECONDS = 0.05;
 const GRAVITY = 1400;
+// Rare event: every logo on screen hits a corner in the same instant.
+const JACKPOT_CHANCE = 1 / 35;
+const JACKPOT_MIN_LOGOS = 4;
+// Too many logos: the player jams, then they all merge into one giant logo.
+const OVERLOAD_LOGOS = 75;
+const JAM_MS = 1500;
+const MERGE_MS = 1200;
 
 const stage = document.getElementById("stage");
 const flash = document.getElementById("flash");
+const banner = document.getElementById("banner");
+const bannerText = document.getElementById("banner-text");
 const burstCanvas = document.getElementById("burst");
 const burst = burstCanvas.getContext("2d");
 const countLabel = document.getElementById("count");
 const soundButton = document.getElementById("sound");
+const fullscreenButton = document.getElementById("fullscreen");
 const logoTemplate = document.getElementById("logo-template");
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-let width, height, speed;
+let width, height, speed, logoWidth, logoHeight;
 let corners = 0;
 let lastTime = performance.now();
-const logos = [];
+let logos = [];
 const particles = [];
+let mode = "play"; // play, jam, merge, giant, landing
+let jackpot = null;
+let giant = null;
 
-function randomColorIndex(except) {
-  let next;
-  do next = Math.floor(Math.random() * COLORS.length); while (next === except);
-  return next;
-}
+const brake = (secondsLeft, window = SLOWMO_WINDOW_SECONDS) => brakeCurve(secondsLeft, window, SLOWMO_FLOOR);
+const randomColorIndex = (except) => pickDifferent(COLORS.length, except);
 
 function measure() {
-  const box = logos[0].element.getBoundingClientRect();
-  width = Math.max(1, innerWidth - box.width);
-  height = Math.max(1, innerHeight - box.height);
+  const probe = createLogoElement();
+  probe.style.visibility = "hidden";
+  ({ width: logoWidth, height: logoHeight } = probe.getBoundingClientRect());
+  probe.remove();
+  width = Math.max(1, innerWidth - logoWidth);
+  height = Math.max(1, innerHeight - logoHeight);
   speed = 0.2 * Math.hypot(innerWidth, innerHeight);
   const scale = devicePixelRatio || 1;
   burstCanvas.width = innerWidth * scale;
@@ -139,13 +190,26 @@ function measure() {
   burst.setTransform(scale, 0, 0, scale, 0, 0);
 }
 
-function addLogo(x, y) {
+function createLogoElement() {
   const element = logoTemplate.content.firstElementChild.cloneNode(true);
   stage.append(element);
-  const logo = { element, svg: element.firstElementChild, x, y, colorIndex: randomColorIndex(-1), boost: 0 };
+  return element;
+}
+
+function addLogo(x, y) {
+  const element = createLogoElement();
+  const logo = { element, svg: element.firstElementChild, x, y, colorIndex: randomColorIndex(-1), boost: 0, trail: [] };
   element.style.color = COLORS[logo.colorIndex];
   logos.push(logo);
+  startRun(logo);
+  draw(logo);
   return logo;
+}
+
+function popIn(svg) {
+  if (reduceMotion) return;
+  svg.animate([{ transform: "scale(0)" }, { transform: "scale(1.15)" }, { transform: "scale(1)" }],
+    { duration: 280, easing: "ease-out" });
 }
 
 function startRun(logo) {
@@ -160,31 +224,27 @@ function recolor(logo) {
 }
 
 function draw(logo) {
-  logo.element.style.transform = `translate(${fold(logo.x, width)}px, ${fold(logo.y, height)}px)`;
+  const x = fold(logo.x, width);
+  const y = fold(logo.y, height);
+  logo.element.style.transform = `translate(${x}px, ${y}px)`;
+  logo.trail.push([x, y]);
+  if (logo.trail.length > 12) logo.trail.shift();
 }
 
-// The payoff. Everything here happens in the same instant so it lands as one hit.
-function hitCorner(logo, incoming) {
-  recolor(logo);
-  logo.boost = RICOCHET_BOOST;
-  const color = COLORS[logo.colorIndex];
-  const left = fold(logo.x, width) < width / 2;
-  const top = fold(logo.y, height) < height / 2;
-  const towardX = left ? -1 : 1;
-  const towardY = top ? -1 : 1;
-
-  corners += 1;
+function updateCount() {
   countLabel.textContent = corners === 1 ? "1 corner" : `${corners} corners`;
-  navigator.vibrate?.(35);
-  if (soundOn) playCorner();
-  if (reduceMotion) return;
+  if (!reduceMotion) {
+    countLabel.animate([{ transform: "scale(1.6)" }, { transform: "scale(1)" }], { duration: 420, easing: "ease-out" });
+  }
+}
 
-  // Squash flat along the way it came in, then stretch along the way it leaves.
-  const inAngle = Math.atan2(towardY * Math.abs(incoming.y1 - incoming.y0), towardX * Math.abs(incoming.x1 - incoming.x0));
-  const outAngle = Math.atan2(-towardY * Math.abs(logo.run.y1 - logo.run.y0), -towardX * Math.abs(logo.run.x1 - logo.run.x0));
-  const along = (angle, stretch, squeeze) => `rotate(${angle}rad) scale(${stretch}, ${squeeze}) rotate(${-angle}rad)`;
-  logo.svg.style.transformOrigin = `${left ? 0 : 100}% ${top ? 0 : 100}%`;
-  logo.svg.animate(
+// ---- Hit effects ----
+
+// Squash flat along the way it came in, then stretch along the way it leaves.
+function squashAndStretch(svg, inAngle, outAngle, left, top, color) {
+  if (reduceMotion) return;
+  svg.style.transformOrigin = `${left ? 0 : 100}% ${top ? 0 : 100}%`;
+  svg.animate(
     [
       { transform: along(inAngle, 0.6, 1.28), color: "#000" },
       { transform: along(outAngle, 1.32, 0.78), color: "#000", offset: 0.22 },
@@ -194,12 +254,18 @@ function hitCorner(logo, incoming) {
     ],
     { duration: 560, easing: "ease-out" }
   );
-  flash.style.background = color;
-  flash.animate(
-    [{ opacity: 1 }, { opacity: 1, offset: 0.12 }, { opacity: 0 }],
-    { duration: 560, easing: "ease-out" }
-  );
-  const kick = 18;
+}
+
+function flashScreen(colors, duration) {
+  if (reduceMotion) return;
+  const frames = colors.length === 1
+    ? [{ opacity: 1, background: colors[0] }, { opacity: 1, background: colors[0], offset: 0.12 }, { opacity: 0, background: colors[0] }]
+    : [...colors.map((background) => ({ opacity: 1, background })), { opacity: 0, background: colors.at(-1) }];
+  flash.animate(frames, { duration, easing: colors.length === 1 ? "ease-out" : "steps(1, end)" });
+}
+
+function shakeStage(towardX, towardY, kick) {
+  if (reduceMotion) return;
   stage.animate(
     [
       { transform: `translate(${towardX * kick}px, ${towardY * kick}px)` },
@@ -207,16 +273,33 @@ function hitCorner(logo, incoming) {
       { transform: `translate(${towardX * kick * 0.25}px, ${towardY * kick * 0.25}px)` },
       { transform: "translate(0, 0)" },
     ],
-    { duration: 320, easing: "ease-out" }
+    { duration: 320 + kick * 4, easing: "ease-out" }
   );
-  countLabel.animate([{ transform: "scale(1.6)" }, { transform: "scale(1)" }], { duration: 420, easing: "ease-out" });
-  sprayConfetti(left ? 0 : innerWidth, top ? 0 : innerHeight, -towardX, -towardY);
 }
 
-function sprayConfetti(x, y, inwardX, inwardY) {
-  const aim = Math.atan2(inwardY, inwardX);
+function showBanner(text) {
+  if (reduceMotion) return;
+  bannerText.textContent = text;
+  banner.animate(
+    [
+      { opacity: 1, transform: "scale(0.2) rotate(-8deg)" },
+      { opacity: 1, transform: "scale(1.15) rotate(3deg)", offset: 0.15 },
+      { opacity: 1, transform: "scale(1) rotate(0)", offset: 0.25 },
+      { opacity: 1, transform: "scale(1)", offset: 0.8 },
+      { opacity: 0, transform: "scale(1.05)" },
+    ],
+    { duration: 1800, easing: "ease-out" }
+  );
+  bannerText.animate(COLORS.map((color) => ({ color })), { duration: 1800, easing: "steps(7, end)" });
+}
+
+function sprayConfetti(left, top, count) {
+  if (reduceMotion) return;
+  const x = left ? 0 : innerWidth;
+  const y = top ? 0 : innerHeight;
+  const aim = Math.atan2(top ? 1 : -1, left ? 1 : -1);
   const reach = Math.hypot(innerWidth, innerHeight);
-  for (let i = 0; i < 80; i++) {
+  for (let i = 0; i < count; i++) {
     const angle = aim + (Math.random() - 0.5) * 1.5;
     const launch = reach * (0.35 + Math.random() * 0.75);
     particles.push({
@@ -253,16 +336,20 @@ function updateConfetti(seconds) {
   }
 }
 
+// ---- Normal play ----
+
 function moveLogo(logo, seconds) {
-  // Brake hard in the last few inches so everyone gets to lean in.
-  const secondsLeft = (logo.run.length - logo.travelled) / speed;
-  const slowmo = secondsLeft < SLOWMO_WINDOW_SECONDS
-    ? SLOWMO_FLOOR + (1 - SLOWMO_FLOOR) * (secondsLeft / SLOWMO_WINDOW_SECONDS) ** 2
-    : 1;
-  // After a hit, the ricochet boost decays back to cruising speed.
-  logo.boost *= Math.exp(-seconds / RICOCHET_SETTLE_SECONDS);
-  logo.travelled += speed * seconds * slowmo * (1 + logo.boost);
-  const progress = Math.min(logo.travelled / logo.run.length, 1);
+  let progress;
+  if (jackpot?.logos.has(logo)) {
+    progress = jackpot.progress;
+  } else {
+    // Brake hard in the last few inches so everyone gets to lean in.
+    const secondsLeft = (logo.run.length - logo.travelled) / speed;
+    // After a hit, the ricochet boost decays back to cruising speed.
+    logo.boost *= Math.exp(-seconds / RICOCHET_SETTLE_SECONDS);
+    logo.travelled += speed * seconds * brake(secondsLeft) * (1 + logo.boost);
+    progress = Math.min(logo.travelled / logo.run.length, 1);
+  }
   while (logo.nextBounce < logo.run.bounces.length && logo.run.bounces[logo.nextBounce] <= progress) {
     logo.nextBounce += 1;
     recolor(logo);
@@ -270,17 +357,217 @@ function moveLogo(logo, seconds) {
   logo.x = logo.run.x0 + (logo.run.x1 - logo.run.x0) * progress;
   logo.y = logo.run.y0 + (logo.run.y1 - logo.run.y0) * progress;
   draw(logo);
-  if (progress === 1) {
-    const incoming = logo.run;
-    startRun(logo);
-    hitCorner(logo, incoming);
-  }
+  if (progress === 1) hitCorner(logo);
 }
+
+function hitCorner(logo) {
+  const incoming = logo.run;
+  startRun(logo);
+  logo.boost = RICOCHET_BOOST;
+  recolor(logo);
+  const color = COLORS[logo.colorIndex];
+  const left = fold(logo.x, width) < width / 2;
+  const top = fold(logo.y, height) < height / 2;
+  const towardX = left ? -1 : 1;
+  const towardY = top ? -1 : 1;
+  const inAngle = Math.atan2(towardY * Math.abs(incoming.y1 - incoming.y0), towardX * Math.abs(incoming.x1 - incoming.x0));
+  const outAngle = Math.atan2(-towardY * Math.abs(logo.run.y1 - logo.run.y0), -towardX * Math.abs(logo.run.x1 - logo.run.x0));
+  squashAndStretch(logo.svg, inAngle, outAngle, left, top, color);
+
+  if (jackpot?.logos.has(logo)) {
+    jackpot.logos.delete(logo);
+    jackpot.arrivals.push({ left, top });
+    return;
+  }
+  corners += 1;
+  updateCount();
+  navigator.vibrate?.(35);
+  playCornerSound();
+  flashScreen([color], 560);
+  shakeStage(towardX, towardY, 18);
+  sprayConfetti(left, top, 80);
+  if (!jackpot && Math.random() < JACKPOT_CHANCE) startJackpot();
+}
+
+// ---- Rare event: jackpot ----
+
+function startJackpot() {
+  while (logos.length < JACKPOT_MIN_LOGOS) {
+    popIn(addLogo(Math.random() * width, Math.random() * height).svg);
+  }
+  // Give every logo a run of about the same length, then move them all on
+  // one shared clock so they land together.
+  const runs = planJackpotRuns(logos.map((logo) => [logo.x, logo.y]), width, height, 1.4 * Math.hypot(width, height));
+  logos.forEach((logo, i) => {
+    logo.run = runs[i];
+    logo.travelled = 0;
+    logo.nextBounce = 0;
+  });
+  jackpot = {
+    length: Math.max(...logos.map((logo) => logo.run.length)),
+    progress: 0,
+    logos: new Set(logos),
+    arrivals: [],
+  };
+}
+
+function advanceJackpot(seconds) {
+  const secondsLeft = ((1 - jackpot.progress) * jackpot.length) / speed;
+  jackpot.progress = Math.min(1, jackpot.progress + (speed * seconds * brake(secondsLeft)) / jackpot.length);
+}
+
+function jackpotFinale() {
+  const { arrivals } = jackpot;
+  jackpot = null;
+  corners += arrivals.length;
+  updateCount();
+  navigator.vibrate?.([60, 40, 60, 40, 120]);
+  playJackpotSound();
+  showBanner("Jackpot");
+  flashScreen([...COLORS, ...COLORS], 1100);
+  shakeStage(Math.random() < 0.5 ? -1 : 1, Math.random() < 0.5 ? -1 : 1, 34);
+  for (const { left, top } of arrivals) sprayConfetti(left, top, 140);
+}
+
+// ---- Too many logos: jam, merge, one giant hit ----
+
+function startJam() {
+  mode = "jam";
+  jackpot = null;
+  playJamSound();
+  // Scratched disc: every logo skips back and forth between recent frames.
+  let beat = 0;
+  const stutter = setInterval(() => {
+    beat += 1;
+    for (const logo of logos) {
+      const back = beat % 2 ? 0 : beat % 5 ? 6 : 11;
+      const [x, y] = logo.trail[Math.max(0, logo.trail.length - 1 - back)];
+      logo.element.style.transform = `translate(${x}px, ${y}px)`;
+    }
+    if (!reduceMotion) {
+      stage.style.transform = `translate(${(Math.random() - 0.5) * 16}px, ${(Math.random() - 0.5) * 10}px)`;
+      if (beat % 4 === 0) flashScreen([COLORS[beat % COLORS.length]], 120);
+    }
+  }, 80);
+  setTimeout(() => {
+    clearInterval(stutter);
+    stage.style.transform = "";
+    startMerge();
+  }, JAM_MS);
+}
+
+function startMerge() {
+  mode = "merge";
+  playSound(sounds?.mergeWhoosh, { gain: 0.7 });
+  const centerX = (innerWidth - logoWidth) / 2;
+  const centerY = (innerHeight - logoHeight) / 2;
+  for (const logo of logos) {
+    const [x, y] = logo.trail.at(-1);
+    // Anticipation: pull back a little, then get sucked into the middle.
+    const backX = x + (x - centerX) * 0.15;
+    const backY = y + (y - centerY) * 0.15;
+    logo.element.animate(
+      [
+        { transform: `translate(${x}px, ${y}px) scale(1)` },
+        { transform: `translate(${backX}px, ${backY}px) scale(1.1)`, offset: 0.35 },
+        { transform: `translate(${centerX}px, ${centerY}px) scale(0.1)` },
+      ],
+      { duration: MERGE_MS - 300, delay: Math.random() * 300, easing: "cubic-bezier(.55, 0, .9, .5)", fill: "forwards" }
+    );
+  }
+  const merged = logos;
+  logos = [];
+  setTimeout(() => {
+    merged.forEach((logo) => logo.element.remove());
+    spawnGiant();
+  }, MERGE_MS);
+}
+
+function spawnGiant() {
+  const element = createLogoElement();
+  const giantWidth = Math.min(innerWidth * 0.62, innerHeight * 1.1);
+  const giantHeight = giantWidth / 2;
+  element.style.width = `${giantWidth}px`;
+  const left = Math.random() < 0.5;
+  const top = Math.random() < 0.5;
+  giant = {
+    element,
+    svg: element.firstElementChild,
+    width: giantWidth,
+    x0: (innerWidth - giantWidth) / 2,
+    y0: (innerHeight - giantHeight) / 2,
+    x1: left ? 0 : innerWidth - giantWidth,
+    y1: top ? 0 : innerHeight - giantHeight,
+    left,
+    top,
+    travelled: 0,
+    hold: 0.8,
+  };
+  giant.length = Math.hypot(giant.x1 - giant.x0, giant.y1 - giant.y0);
+  element.style.color = COLORS[0];
+  element.style.transform = `translate(${giant.x0}px, ${giant.y0}px)`;
+  playThump(1.4);
+  popIn(giant.svg);
+  mode = "giant";
+}
+
+function moveGiant(seconds) {
+  if (giant.hold > 0) {
+    giant.hold -= seconds;
+    return;
+  }
+  const giantSpeed = speed * 0.5;
+  const secondsLeft = (giant.length - giant.travelled) / giantSpeed;
+  giant.travelled = Math.min(giant.length, giant.travelled + giantSpeed * seconds * brake(secondsLeft, 0.4));
+  const progress = giant.travelled / giant.length;
+  const x = giant.x0 + (giant.x1 - giant.x0) * progress;
+  const y = giant.y0 + (giant.y1 - giant.y0) * progress;
+  giant.element.style.transform = `translate(${x}px, ${y}px)`;
+  if (progress === 1) giantHit();
+}
+
+function giantHit() {
+  mode = "landing";
+  const { element, svg, left, top } = giant;
+  corners += 1;
+  updateCount();
+  navigator.vibrate?.([200, 60, 300]);
+  playGiantSound();
+  flashScreen([...COLORS, ...COLORS, ...COLORS], 1600);
+  shakeStage(left ? -1 : 1, top ? -1 : 1, 48);
+  for (let i = 0; i < 3; i++) sprayConfetti(left, top, 120);
+  // Squash into the corner, then shrink down into a normal logo that keeps going.
+  const inAngle = Math.atan2(giant.y1 - giant.y0, giant.x1 - giant.x0);
+  const normalScale = logoWidth / giant.width;
+  svg.style.transformOrigin = `${left ? 0 : 100}% ${top ? 0 : 100}%`;
+  svg.animate(
+    [
+      { transform: along(inAngle, 0.55, 1.3), color: "#000" },
+      { transform: along(inAngle, 0.7, 1.2), color: "#000", offset: 0.2 },
+      { transform: along(inAngle, 1.08, 0.95), color: COLORS[1], offset: 0.45 },
+      { transform: along(inAngle, normalScale, normalScale), color: COLORS[1] },
+    ],
+    { duration: reduceMotion ? 1 : 1100, easing: "ease-in-out", fill: "forwards" }
+  ).finished.then(() => {
+    element.remove();
+    giant = null;
+    const logo = addLogo(left ? 0 : width, top ? 0 : height);
+    logo.boost = RICOCHET_BOOST;
+    mode = "play";
+  });
+}
+
+// ---- Main loop ----
 
 function tick(now) {
   const seconds = Math.min((now - lastTime) / 1000, MAX_FRAME_SECONDS);
   lastTime = now;
-  for (const logo of logos) moveLogo(logo, seconds);
+  if (mode === "play") {
+    if (jackpot) advanceJackpot(seconds);
+    for (const logo of logos) moveLogo(logo, seconds);
+    if (jackpot && jackpot.logos.size === 0) jackpotFinale();
+  }
+  if (mode === "giant") moveGiant(seconds);
   if (particles.length) updateConfetti(seconds);
   requestAnimationFrame(tick);
 }
@@ -294,71 +581,143 @@ addEventListener("resize", () => {
     startRun(logo);
     draw(logo);
   });
+  if (jackpot) startJackpot();
 });
 
 // Every click drops in another logo, centered on the pointer.
 addEventListener("pointerdown", (event) => {
-  if (event.target.closest("button")) return;
-  const box = logos[0].element.getBoundingClientRect();
-  const x = Math.min(Math.max(event.clientX - box.width / 2, 0), width);
-  const y = Math.min(Math.max(event.clientY - box.height / 2, 0), height);
-  const logo = addLogo(x, y);
-  startRun(logo);
-  draw(logo);
-  if (!reduceMotion) {
-    logo.svg.animate([{ transform: "scale(0)" }, { transform: "scale(1.15)" }, { transform: "scale(1)" }],
-      { duration: 280, easing: "ease-out" });
-  }
+  if (event.target.closest("button") || mode !== "play") return;
+  const x = Math.min(Math.max(event.clientX - logoWidth / 2, 0), width);
+  const y = Math.min(Math.max(event.clientY - logoHeight / 2, 0), height);
+  popIn(addLogo(x, y).svg);
+  if (logos.length >= OVERLOAD_LOGOS) startJam();
 });
 
-// Sound: a low thump for the impact, then one of a few short cheers, never the same twice in a row.
+// ---- Sound ----
+
 let soundOn = false;
 let audio;
-let cheerBuffers;
+let sounds;
 let lastCheer = -1;
+
+async function loadSound(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Could not load ${url}: ${response.status}`);
+  return audio.decodeAudioData(await response.arrayBuffer());
+}
+
+async function loadSounds() {
+  const entries = await Promise.all(Object.entries(SOUND_FILES).map(async ([name, source]) =>
+    [name, Array.isArray(source) ? await Promise.all(source.map(loadSound)) : await loadSound(source)]));
+  return Object.fromEntries(entries);
+}
+
+const SOUND_ICONS = {
+  on: "M16.5 8.5a5 5 0 0 1 0 7M19.5 5.5a9 9 0 0 1 0 13",
+  off: "M16 9l5 6M21 9l-5 6",
+};
 
 soundButton.addEventListener("click", async () => {
   soundOn = !soundOn;
-  soundButton.textContent = soundOn ? "Sound on" : "Sound off";
+  soundButton.querySelector(".icon-detail").setAttribute("d", soundOn ? SOUND_ICONS.on : SOUND_ICONS.off);
+  soundButton.setAttribute("aria-label", soundOn ? "Turn sound off" : "Turn sound on");
   if (!soundOn) return;
   audio ??= new AudioContext();
   await audio.resume();
-  cheerBuffers ??= await Promise.all(CHEERS.map(async (url) => {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`Could not load ${url}: ${response.status}`);
-    return audio.decodeAudioData(await response.arrayBuffer());
-  }));
-});
-addEventListener("keydown", (event) => {
-  if (event.key === "s" || event.key === "S") soundButton.click();
+  sounds ??= await loadSounds();
 });
 
-function playCorner() {
-  if (!cheerBuffers) return;
-  const now = audio.currentTime;
-
-  const thump = audio.createOscillator();
-  const thumpLevel = audio.createGain();
-  thump.frequency.setValueAtTime(160, now);
-  thump.frequency.exponentialRampToValueAtTime(42, now + 0.18);
-  thumpLevel.gain.setValueAtTime(0.9, now);
-  thumpLevel.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
-  thump.connect(thumpLevel).connect(audio.destination);
-  thump.start(now);
-  thump.stop(now + 0.3);
-
-  let pick;
-  do pick = Math.floor(Math.random() * cheerBuffers.length); while (pick === lastCheer && cheerBuffers.length > 1);
-  lastCheer = pick;
-  const cheer = audio.createBufferSource();
-  const cheerLevel = audio.createGain();
-  cheer.buffer = cheerBuffers[pick];
-  cheerLevel.gain.value = 0.8;
-  cheer.connect(cheerLevel).connect(audio.destination);
-  cheer.start(now + 0.02);
+function playSound(buffer, { delay = 0, gain = 0.8, rate = 1 } = {}) {
+  if (!soundOn || !buffer) return;
+  const source = audio.createBufferSource();
+  const level = audio.createGain();
+  source.buffer = buffer;
+  source.playbackRate.value = rate;
+  level.gain.value = gain;
+  source.connect(level).connect(audio.destination);
+  source.start(audio.currentTime + delay);
 }
 
-// Hide the cursor and button after a few still seconds, like a screensaver.
+function playThump(power = 1) {
+  if (!soundOn || !audio) return;
+  const now = audio.currentTime;
+  const thump = audio.createOscillator();
+  const level = audio.createGain();
+  thump.frequency.setValueAtTime(160 / power, now);
+  thump.frequency.exponentialRampToValueAtTime(42 / power, now + 0.18 * power);
+  level.gain.setValueAtTime(0.9, now);
+  level.gain.exponentialRampToValueAtTime(0.001, now + 0.28 * power);
+  thump.connect(level).connect(audio.destination);
+  thump.start(now);
+  thump.stop(now + 0.3 * power);
+}
+
+// One of a few short cheers, never the same twice in a row.
+function playCornerSound() {
+  if (!sounds) return;
+  playThump();
+  lastCheer = pickDifferent(sounds.cheers.length, lastCheer);
+  playSound(sounds.cheers[lastCheer], { delay: 0.02 });
+}
+
+function playJackpotSound() {
+  if (!sounds) return;
+  playThump(1.3);
+  playSound(sounds.giantImpact, { gain: 0.6 });
+  sounds.cheers.forEach((cheer, i) => playSound(cheer, { delay: 0.02 + i * 0.06, gain: 0.55 }));
+}
+
+function playJamSound() {
+  if (!sounds) return;
+  playSound(sounds.jamWarble, { gain: 0.7 });
+  playSound(sounds.jamStutter, { delay: 0.55, gain: 0.7 });
+  playSound(sounds.jamStutter, { delay: 0.95, gain: 0.7, rate: 0.8 });
+}
+
+function playGiantSound() {
+  if (!sounds) return;
+  playThump(2);
+  playSound(sounds.giantImpact, { gain: 1 });
+  playSound(sounds.giantHorn, { delay: 0.05, gain: 0.7 });
+  sounds.cheers.forEach((cheer, i) => playSound(cheer, { delay: 0.1 + i * 0.08, gain: 0.6 }));
+}
+
+// ---- Full screen, keep awake, keys, idle ----
+
+const FULLSCREEN_ICONS = {
+  enter: "M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5",
+  exit: "M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5",
+};
+
+fullscreenButton.hidden = !document.fullscreenEnabled;
+fullscreenButton.addEventListener("click", () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen();
+});
+document.addEventListener("fullscreenchange", () => {
+  const full = Boolean(document.fullscreenElement);
+  fullscreenButton.querySelector(".icon-detail").setAttribute("d", full ? FULLSCREEN_ICONS.exit : FULLSCREEN_ICONS.enter);
+  fullscreenButton.setAttribute("aria-label", full ? "Exit full screen" : "Full screen");
+});
+
+// Like a real screensaver, don't let the display go to sleep.
+async function keepScreenAwake() {
+  if (!("wakeLock" in navigator) || document.visibilityState !== "visible") return;
+  try {
+    await navigator.wakeLock.request("screen");
+  } catch (error) {
+    console.warn("Could not keep the screen awake:", error.message);
+  }
+}
+document.addEventListener("visibilitychange", keepScreenAwake);
+keepScreenAwake();
+
+addEventListener("keydown", (event) => {
+  if (event.key === "s" || event.key === "S") soundButton.click();
+  if ((event.key === "f" || event.key === "F") && document.fullscreenEnabled) fullscreenButton.click();
+});
+
+// Hide the cursor and buttons after a few still seconds.
 let idleTimer;
 function wake() {
   document.body.classList.remove("idle");
@@ -369,11 +728,22 @@ addEventListener("pointermove", wake);
 addEventListener("keydown", wake);
 wake();
 
+// Read-only peek at the state, plus a way to force the rare event, for the test suite.
+if (new URLSearchParams(location.search).has("test")) {
+  window.nothingButCorners = {
+    get mode() { return mode; },
+    get corners() { return corners; },
+    get jackpotActive() { return Boolean(jackpot); },
+    get soundsLoaded() { return Boolean(sounds); },
+    get bounds() { return { width, height }; },
+    get logos() { return logos.map((logo) => ({ x: fold(logo.x, width), y: fold(logo.y, height), color: logo.element.style.color })); },
+    startJackpot,
+  };
+}
+
 document.fonts.ready.then(() => {
-  const first = addLogo(0, 0);
   measure();
-  startRun(first);
-  draw(first);
+  addLogo(0, 0);
   lastTime = performance.now();
   requestAnimationFrame(tick);
 });
