@@ -42,7 +42,7 @@ test("jackpot: every logo hits a corner in the same frame", async ({ page }) => 
   await expect(page.locator("#banner-text")).toHaveText("Jackpot");
 });
 
-test("too many logos: the player jams, a ki blast fires a giant logo into a corner, then it resets", async ({ page }) => {
+test("too many logos: the player jams, a ki blast fires a giant logo into two corners, then it resets", async ({ page }) => {
   const errors = await openPage(page);
   for (let i = 0; i < 48; i++) await page.mouse.click(100 + ((i * 37) % 1000), 100 + ((i * 53) % 500));
   expect((await readState(page)).mode).toBe("play");
@@ -70,10 +70,18 @@ test("too many logos: the player jams, a ki blast fires a giant logo into a corn
   await expect(page.locator(".logo")).toHaveCount(1);
   const giantWidth = await page.locator(".logo").evaluate((element) => element.getBoundingClientRect().width);
   expect(giantWidth).toBeGreaterThan(500);
-  await sampleUntil(page, (s) => s.mode === "landing", { maxMs: 1000 });
+  // First corner: it counts, and the giant ricochets toward the opposite one.
+  await sampleUntil(page, (s) => s.mode === "ricochet", { maxMs: 1000 });
   expect((await readState(page)).corners).toBe(corners + 1);
+  const firstCorner = await page.locator(".logo").evaluate((element) => element.getBoundingClientRect());
+  // Second corner: it counts again, diagonally across the screen.
+  await sampleUntil(page, (s) => s.mode === "landing", { maxMs: 2000 });
+  expect((await readState(page)).corners).toBe(corners + 2);
+  const secondCorner = await page.locator(".logo").evaluate((element) => element.getBoundingClientRect());
+  expect(Math.abs(secondCorner.x - firstCorner.x)).toBeGreaterThan(300);
+  expect(Math.abs(secondCorner.y - firstCorner.y)).toBeGreaterThan(200);
 
-  // The explosion runs its course, and the giant shrinks back into a normal
+  // The shatter runs its course, and the giant shrinks back into a normal
   // logo in that corner. Its shrink is a CSS animation, which runs on real
   // time rather than the test's fake clock.
   await page.clock.runFor(1000);
