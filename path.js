@@ -20,7 +20,7 @@ function greatestCommonDivisor(a, b) {
 
 // Random lattice step (m, n), coprime, with random signs. The plain
 // diagonal (1, 1) is kept but made rarer, since it has no bounces.
-export function pickCornerStep(random = Math.random, maxStep = 4) {
+export function pickCornerStep(random = Math.random, maxStep = 3) {
   for (;;) {
     const m = 1 + Math.floor(random() * maxStep);
     const n = 1 + Math.floor(random() * maxStep);

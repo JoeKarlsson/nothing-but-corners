@@ -108,7 +108,7 @@ function measure() {
   const box = logo.getBoundingClientRect();
   width = Math.max(1, innerWidth - box.width);
   height = Math.max(1, innerHeight - box.height);
-  speed = 0.14 * Math.hypot(innerWidth, innerHeight);
+  speed = 0.2 * Math.hypot(innerWidth, innerHeight);
 }
 
 function startRun() {
