@@ -147,10 +147,14 @@ const GRAVITY = 1400;
 // Rare event: every logo on screen hits a corner in the same instant.
 const JACKPOT_CHANCE = 1 / 35;
 const JACKPOT_MIN_LOGOS = 4;
-// Too many logos: the player jams, then they all merge into one giant logo.
-const OVERLOAD_LOGOS = 75;
+// Too many logos: the player jams, then everything implodes, anime style,
+// into one point, and a giant logo bursts out of it.
+const OVERLOAD_LOGOS = 50;
 const JAM_MS = 1500;
-const MERGE_MS = 1200;
+const IMPLODE_MS = 1400; // spiral in, speed lines, debris sucked to the middle
+const COLLAPSE_HOLD_MS = 220; // a beat of total silence on one bright dot
+const IMPACT_FRAME_MS = 60; // each black/white impact frame
+const IMPACT_FRAMES = ["#fff", "#000", "#fff", "#000"];
 
 const stage = document.getElementById("stage");
 const flash = document.getElementById("flash");
@@ -169,6 +173,10 @@ let corners = 0;
 let lastTime = performance.now();
 let logos = [];
 const particles = [];
+const rings = [];
+let implosion = null; // { start } while everything is getting sucked in
+let collapseDot = null; // { start } during the silent beat
+let effectsOnCanvas = false;
 let mode = "play"; // play, jam, merge, giant, landing
 let jackpot = null;
 let giant = null;
@@ -294,13 +302,14 @@ function showBanner(text) {
 }
 
 function sprayConfetti(left, top, count) {
+  spray(left ? 0 : innerWidth, top ? 0 : innerHeight, Math.atan2(top ? 1 : -1, left ? 1 : -1), 1.5, count);
+}
+
+function spray(x, y, aim, spread, count, power = 1) {
   if (reduceMotion) return;
-  const x = left ? 0 : innerWidth;
-  const y = top ? 0 : innerHeight;
-  const aim = Math.atan2(top ? 1 : -1, left ? 1 : -1);
-  const reach = Math.hypot(innerWidth, innerHeight);
+  const reach = Math.hypot(innerWidth, innerHeight) * power;
   for (let i = 0; i < count; i++) {
-    const angle = aim + (Math.random() - 0.5) * 1.5;
+    const angle = aim + (Math.random() - 0.5) * spread;
     const launch = reach * (0.35 + Math.random() * 0.75);
     particles.push({
       x, y,
@@ -314,10 +323,46 @@ function sprayConfetti(left, top, count) {
   }
 }
 
-function updateConfetti(seconds) {
+// Everything drawn on the effects canvas: confetti, speed lines, debris,
+// the collapse dot and shockwave rings.
+function renderEffects(now, seconds) {
+  const active = particles.length || rings.length || implosion || collapseDot;
+  if (!active && !effectsOnCanvas) return;
   burst.clearRect(0, 0, innerWidth, innerHeight);
+  effectsOnCanvas = Boolean(active);
+  if (implosion) drawImplosion(now);
+  if (collapseDot) drawCollapseDot(now);
+  updateRings(seconds);
+  updateParticles(seconds);
+}
+
+function updateParticles(seconds) {
+  const centerX = innerWidth / 2;
+  const centerY = innerHeight / 2;
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
+    if (p.sucked) {
+      // Debris pulled into the middle, drawn as streaks along its velocity.
+      const dx = centerX - p.x;
+      const dy = centerY - p.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance < 24 || !implosion) {
+        particles.splice(i, 1);
+        continue;
+      }
+      p.vx += (dx / distance) * 5200 * seconds;
+      p.vy += (dy / distance) * 5200 * seconds;
+      p.x += p.vx * seconds;
+      p.y += p.vy * seconds;
+      const streak = Math.min(90, 6 + Math.hypot(p.vx, p.vy) * 0.04);
+      burst.save();
+      burst.translate(p.x, p.y);
+      burst.rotate(Math.atan2(p.vy, p.vx));
+      burst.fillStyle = p.color;
+      burst.fillRect(-streak, -1.5, streak, 3);
+      burst.restore();
+      continue;
+    }
     p.vx *= 1 - 1.6 * seconds;
     p.vy = p.vy * (1 - 1.6 * seconds) + GRAVITY * seconds;
     p.x += p.vx * seconds;
@@ -458,29 +503,135 @@ function startJam() {
 
 function startMerge() {
   mode = "merge";
-  playSound(sounds?.mergeWhoosh, { gain: 0.7 });
-  const centerX = (innerWidth - logoWidth) / 2;
-  const centerY = (innerHeight - logoHeight) / 2;
+  playImplosionSound();
+  implosion = { start: performance.now() };
+  const centerX = innerWidth / 2;
+  const centerY = innerHeight / 2;
   for (const logo of logos) {
+    if (reduceMotion) break;
     const [x, y] = logo.trail.at(-1);
-    // Anticipation: pull back a little, then get sucked into the middle.
-    const backX = x + (x - centerX) * 0.15;
-    const backY = y + (y - centerY) * 0.15;
-    logo.element.animate(
-      [
-        { transform: `translate(${x}px, ${y}px) scale(1)` },
-        { transform: `translate(${backX}px, ${backY}px) scale(1.1)`, offset: 0.35 },
-        { transform: `translate(${centerX}px, ${centerY}px) scale(0.1)` },
-      ],
-      { duration: MERGE_MS - 300, delay: Math.random() * 300, easing: "cubic-bezier(.55, 0, .9, .5)", fill: "forwards" }
-    );
+    const startX = x + logoWidth / 2 - centerX;
+    const startY = y + logoHeight / 2 - centerY;
+    const startRadius = Math.hypot(startX, startY);
+    const startAngle = Math.atan2(startY, startX);
+    const spin = (Math.random() < 0.5 ? 1 : -1) * (1.5 + Math.random()) * Math.PI;
+    // Spiral in: pull back a little first (anticipation), then accelerate
+    // into the middle, spinning faster and shrinking to nothing.
+    const frames = [];
+    for (let k = 0; k <= 12; k++) {
+      const t = k / 12;
+      const radius = startRadius * (t < 0.2 ? 1 + 0.6 * t : 1.12 * (1 - ((t - 0.2) / 0.8) ** 2));
+      const angle = startAngle + spin * t * t;
+      const scale = t < 0.2 ? 1 + t : Math.max(0.04, 1.2 * (1 - (t - 0.2) / 0.8));
+      frames.push({
+        offset: t,
+        transform: `translate(${centerX + Math.cos(angle) * radius - logoWidth / 2}px, ${centerY + Math.sin(angle) * radius - logoHeight / 2}px) rotate(${spin * t * t}rad) scale(${scale})`,
+        color: t < 0.6 ? logo.element.style.color : "#fff",
+      });
+    }
+    logo.element.animate(frames, { duration: IMPLODE_MS - 200, delay: Math.random() * 200, fill: "forwards" });
   }
-  const merged = logos;
+  const imploded = logos;
   logos = [];
   setTimeout(() => {
-    merged.forEach((logo) => logo.element.remove());
+    imploded.forEach((logo) => logo.element.remove());
+    collapse();
+  }, IMPLODE_MS);
+}
+
+// Speed lines (manga focus lines) closing in on the middle, flickering
+// every frame, plus a shaking screen and debris getting sucked in.
+function drawImplosion(now) {
+  const progress = Math.min(1, (now - implosion.start) / IMPLODE_MS);
+  const centerX = innerWidth / 2;
+  const centerY = innerHeight / 2;
+  const outer = Math.hypot(innerWidth, innerHeight) / 2 + 20;
+  burst.fillStyle = "#fff";
+  const lines = Math.floor(40 + 110 * progress);
+  for (let i = 0; i < lines; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const inner = outer * (0.25 + Math.random() * 0.45) * (1 - 0.75 * progress);
+    const half = (0.004 + Math.random() * 0.012) * (0.6 + progress);
+    burst.beginPath();
+    burst.moveTo(centerX + Math.cos(angle - half) * outer, centerY + Math.sin(angle - half) * outer);
+    burst.lineTo(centerX + Math.cos(angle + half) * outer, centerY + Math.sin(angle + half) * outer);
+    burst.lineTo(centerX + Math.cos(angle) * inner, centerY + Math.sin(angle) * inner);
+    burst.fill();
+  }
+  for (let i = 0; i < 2 + progress * 6; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    particles.push({
+      sucked: true,
+      x: centerX + Math.cos(angle) * outer,
+      y: centerY + Math.sin(angle) * outer,
+      vx: -Math.sin(angle) * 300,
+      vy: Math.cos(angle) * 300,
+      color: COLORS[Math.floor(Math.random() * COLORS.length)],
+    });
+  }
+  const shake = 2 + 16 * progress * progress;
+  stage.style.transform = `translate(${(Math.random() - 0.5) * shake}px, ${(Math.random() - 0.5) * shake}px)`;
+}
+
+// Everything is gone. One bright dot shrinks to a point in total silence.
+function collapse() {
+  implosion = null;
+  stage.style.transform = "";
+  collapseDot = reduceMotion ? null : { start: performance.now() };
+  setTimeout(explode, COLLAPSE_HOLD_MS);
+}
+
+function drawCollapseDot(now) {
+  const progress = Math.min(1, (now - collapseDot.start) / COLLAPSE_HOLD_MS);
+  burst.fillStyle = "#fff";
+  burst.beginPath();
+  burst.arc(innerWidth / 2, innerHeight / 2, 2 + 26 * (1 - progress) ** 2, 0, Math.PI * 2);
+  burst.fill();
+}
+
+// Impact frames, a shockwave and confetti in every direction, and the
+// giant logo bursts out of the point.
+function explode() {
+  collapseDot = null;
+  playExplosionSound();
+  navigator.vibrate?.([120, 40, 200]);
+  if (!reduceMotion) {
+    flash.animate(
+      [...IMPACT_FRAMES.map((background) => ({ opacity: 1, background })), { opacity: 0, background: "#000" }],
+      { duration: IMPACT_FRAME_MS * IMPACT_FRAMES.length, easing: "steps(1, end)" }
+    );
+  }
+  setTimeout(() => {
+    const centerX = innerWidth / 2;
+    const centerY = innerHeight / 2;
+    if (!reduceMotion) {
+      rings.push({ x: centerX, y: centerY, radius: 10, speed: 2600, width: 36, color: "#fff" });
+      rings.push({ x: centerX, y: centerY, radius: 0, speed: 1700, width: 18, color: COLORS[0] });
+      rings.push({ x: centerX, y: centerY, radius: 0, speed: 1100, width: 10, color: COLORS[2] });
+      spray(centerX, centerY, 0, Math.PI * 2, 260, 0.8);
+      shakeStage(Math.random() < 0.5 ? -1 : 1, Math.random() < 0.5 ? -1 : 1, 40);
+    }
     spawnGiant();
-  }, MERGE_MS);
+  }, IMPACT_FRAME_MS * IMPACT_FRAMES.length);
+}
+
+function updateRings(seconds) {
+  const outer = Math.hypot(innerWidth, innerHeight);
+  for (let i = rings.length - 1; i >= 0; i--) {
+    const ring = rings[i];
+    ring.radius += ring.speed * seconds;
+    ring.speed *= 1 - 1.2 * seconds;
+    ring.width *= 1 - 2.2 * seconds;
+    if (ring.radius > outer || ring.width < 0.5) {
+      rings.splice(i, 1);
+      continue;
+    }
+    burst.strokeStyle = ring.color;
+    burst.lineWidth = ring.width;
+    burst.beginPath();
+    burst.arc(ring.x, ring.y, ring.radius, 0, Math.PI * 2);
+    burst.stroke();
+  }
 }
 
 function spawnGiant() {
@@ -506,8 +657,12 @@ function spawnGiant() {
   giant.length = Math.hypot(giant.x1 - giant.x0, giant.y1 - giant.y0);
   element.style.color = COLORS[0];
   element.style.transform = `translate(${giant.x0}px, ${giant.y0}px)`;
-  playThump(1.4);
-  popIn(giant.svg);
+  if (!reduceMotion) {
+    giant.svg.animate(
+      [{ transform: "scale(0) rotate(-20deg)" }, { transform: "scale(1.35) rotate(6deg)" }, { transform: "scale(0.92)" }, { transform: "scale(1)" }],
+      { duration: 520, easing: "ease-out" }
+    );
+  }
   mode = "giant";
 }
 
@@ -568,7 +723,7 @@ function tick(now) {
     if (jackpot && jackpot.logos.size === 0) jackpotFinale();
   }
   if (mode === "giant") moveGiant(seconds);
-  if (particles.length) updateConfetti(seconds);
+  renderEffects(now, seconds);
   requestAnimationFrame(tick);
 }
 
@@ -627,12 +782,13 @@ soundButton.addEventListener("click", async () => {
   sounds ??= await loadSounds();
 });
 
-function playSound(buffer, { delay = 0, gain = 0.8, rate = 1 } = {}) {
+function playSound(buffer, { delay = 0, gain = 0.8, rate = 1, rateTo, rampSeconds = 1 } = {}) {
   if (!soundOn || !buffer) return;
   const source = audio.createBufferSource();
   const level = audio.createGain();
   source.buffer = buffer;
-  source.playbackRate.value = rate;
+  source.playbackRate.setValueAtTime(rate, audio.currentTime + delay);
+  if (rateTo) source.playbackRate.linearRampToValueAtTime(rateTo, audio.currentTime + delay + rampSeconds);
   level.gain.value = gain;
   source.connect(level).connect(audio.destination);
   source.start(audio.currentTime + delay);
@@ -672,6 +828,32 @@ function playJamSound() {
   playSound(sounds.jamWarble, { gain: 0.7 });
   playSound(sounds.jamStutter, { delay: 0.55, gain: 0.7 });
   playSound(sounds.jamStutter, { delay: 0.95, gain: 0.7, rate: 0.8 });
+}
+
+// A rising whine and a whoosh pitched up as everything gets sucked in.
+// It cuts out dead at the collapse, so the silent beat is truly silent.
+function playImplosionSound() {
+  if (!sounds) return;
+  const now = audio.currentTime;
+  const seconds = IMPLODE_MS / 1000;
+  const whine = audio.createOscillator();
+  const level = audio.createGain();
+  whine.type = "sawtooth";
+  whine.frequency.setValueAtTime(70, now);
+  whine.frequency.exponentialRampToValueAtTime(1400, now + seconds);
+  level.gain.setValueAtTime(0.001, now);
+  level.gain.exponentialRampToValueAtTime(0.12, now + seconds);
+  whine.connect(level).connect(audio.destination);
+  whine.start(now);
+  whine.stop(now + seconds);
+  playSound(sounds.mergeWhoosh, { gain: 0.8, rate: 0.6, rateTo: 2.4, rampSeconds: seconds });
+}
+
+function playExplosionSound() {
+  if (!sounds) return;
+  playThump(2.2);
+  playSound(sounds.giantImpact, { gain: 1 });
+  playSound(sounds.giantImpact, { delay: 0.03, gain: 0.7, rate: 0.7 });
 }
 
 function playGiantSound() {

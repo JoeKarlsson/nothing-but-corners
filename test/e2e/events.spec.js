@@ -42,18 +42,27 @@ test("jackpot: every logo hits a corner in the same frame", async ({ page }) => 
   await expect(page.locator("#banner-text")).toHaveText("Jackpot");
 });
 
-test("too many logos: the player jams, they merge into a giant, it lands a corner, then resets", async ({ page }) => {
+test("too many logos: the player jams, everything implodes into a giant, it lands a corner, then resets", async ({ page }) => {
   const errors = await openPage(page);
-  for (let i = 0; i < 73; i++) await page.mouse.click(100 + ((i * 37) % 1000), 100 + ((i * 53) % 500));
+  for (let i = 0; i < 48; i++) await page.mouse.click(100 + ((i * 37) % 1000), 100 + ((i * 53) % 500));
   expect((await readState(page)).mode).toBe("play");
-  await page.mouse.click(640, 360); // the 75th logo
+  await page.mouse.click(640, 360); // the 50th logo
   expect((await readState(page)).mode).toBe("jam");
 
   await page.mouse.click(300, 300); // clicks are ignored while jammed
-  await expect(page.locator(".logo")).toHaveCount(75);
+  await expect(page.locator(".logo")).toHaveCount(50);
 
   await page.clock.runFor(1600);
   expect((await readState(page)).mode).toBe("merge");
+  // Implosion: speed lines and debris get drawn while everything spirals in.
+  await page.clock.runFor(700);
+  expect(await page.evaluate(() => {
+    const canvas = document.getElementById("burst");
+    const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+    for (let i = 3; i < pixels.length; i += 4) if (pixels[i]) return true;
+    return false;
+  })).toBe(true);
+  // Then the silent beat, the impact frames, and the giant bursts out.
   await page.clock.runFor(1300);
   expect((await readState(page)).mode).toBe("giant");
   await expect(page.locator(".logo")).toHaveCount(1);
