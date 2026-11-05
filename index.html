@@ -98,8 +98,12 @@ import { fold, planCornerRun } from "./path.js";
 
 const COLORS = ["#ff4fd8", "#ff8a1f", "#ffe600", "#00e5ff", "#39ff6a", "#ff2b2b", "#ffffff"];
 const CHEERS = ["kids", "wow", "applause", "child-wow", "ooh"].map((name) => `sounds/cheer-${name}.mp3`);
-const SLOWMO_WINDOW_SECONDS = 0.55;
-const SLOWMO_FLOOR = 0.28;
+// Cartoon timing: hold full speed, brake late and hard into the corner
+// (slow in), then snap out fast and settle back to cruising speed.
+const SLOWMO_WINDOW_SECONDS = 0.25;
+const SLOWMO_FLOOR = 0.16;
+const RICOCHET_BOOST = 1.9;
+const RICOCHET_SETTLE_SECONDS = 0.22;
 const MAX_FRAME_SECONDS = 0.05;
 const GRAVITY = 1400;
 
@@ -138,7 +142,7 @@ function measure() {
 function addLogo(x, y) {
   const element = logoTemplate.content.firstElementChild.cloneNode(true);
   stage.append(element);
-  const logo = { element, svg: element.firstElementChild, x, y, colorIndex: randomColorIndex(-1) };
+  const logo = { element, svg: element.firstElementChild, x, y, colorIndex: randomColorIndex(-1), boost: 0 };
   element.style.color = COLORS[logo.colorIndex];
   logos.push(logo);
   return logo;
@@ -160,8 +164,9 @@ function draw(logo) {
 }
 
 // The payoff. Everything here happens in the same instant so it lands as one hit.
-function hitCorner(logo) {
+function hitCorner(logo, incoming) {
   recolor(logo);
+  logo.boost = RICOCHET_BOOST;
   const color = COLORS[logo.colorIndex];
   const left = fold(logo.x, width) < width / 2;
   const top = fold(logo.y, height) < height / 2;
@@ -174,15 +179,20 @@ function hitCorner(logo) {
   if (soundOn) playCorner();
   if (reduceMotion) return;
 
+  // Squash flat along the way it came in, then stretch along the way it leaves.
+  const inAngle = Math.atan2(towardY * Math.abs(incoming.y1 - incoming.y0), towardX * Math.abs(incoming.x1 - incoming.x0));
+  const outAngle = Math.atan2(-towardY * Math.abs(logo.run.y1 - logo.run.y0), -towardX * Math.abs(logo.run.x1 - logo.run.x0));
+  const along = (angle, stretch, squeeze) => `rotate(${angle}rad) scale(${stretch}, ${squeeze}) rotate(${-angle}rad)`;
   logo.svg.style.transformOrigin = `${left ? 0 : 100}% ${top ? 0 : 100}%`;
   logo.svg.animate(
     [
-      { transform: "scale(1.22, 0.78)", color: "#000" },
-      { transform: "scale(0.86, 1.14)", color: "#000", offset: 0.25 },
-      { transform: "scale(1.06, 0.96)", color, offset: 0.55 },
-      { transform: "scale(1)", color },
+      { transform: along(inAngle, 0.6, 1.28), color: "#000" },
+      { transform: along(outAngle, 1.32, 0.78), color: "#000", offset: 0.22 },
+      { transform: along(outAngle, 0.92, 1.07), color, offset: 0.5 },
+      { transform: along(outAngle, 1.03, 0.98), color, offset: 0.75 },
+      { transform: along(outAngle, 1, 1), color },
     ],
-    { duration: 640, easing: "ease-out" }
+    { duration: 560, easing: "ease-out" }
   );
   flash.style.background = color;
   flash.animate(
@@ -244,12 +254,14 @@ function updateConfetti(seconds) {
 }
 
 function moveLogo(logo, seconds) {
-  // Slow down for the last moment before the corner, so everyone gets to lean in.
+  // Brake hard in the last few inches so everyone gets to lean in.
   const secondsLeft = (logo.run.length - logo.travelled) / speed;
   const slowmo = secondsLeft < SLOWMO_WINDOW_SECONDS
-    ? SLOWMO_FLOOR + (1 - SLOWMO_FLOOR) * (secondsLeft / SLOWMO_WINDOW_SECONDS)
+    ? SLOWMO_FLOOR + (1 - SLOWMO_FLOOR) * (secondsLeft / SLOWMO_WINDOW_SECONDS) ** 2
     : 1;
-  logo.travelled += speed * seconds * slowmo;
+  // After a hit, the ricochet boost decays back to cruising speed.
+  logo.boost *= Math.exp(-seconds / RICOCHET_SETTLE_SECONDS);
+  logo.travelled += speed * seconds * slowmo * (1 + logo.boost);
   const progress = Math.min(logo.travelled / logo.run.length, 1);
   while (logo.nextBounce < logo.run.bounces.length && logo.run.bounces[logo.nextBounce] <= progress) {
     logo.nextBounce += 1;
@@ -259,8 +271,9 @@ function moveLogo(logo, seconds) {
   logo.y = logo.run.y0 + (logo.run.y1 - logo.run.y0) * progress;
   draw(logo);
   if (progress === 1) {
-    hitCorner(logo);
+    const incoming = logo.run;
     startRun(logo);
+    hitCorner(logo, incoming);
   }
 }
 
