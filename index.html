@@ -718,15 +718,16 @@ addEventListener("keydown", (event) => {
 });
 
 // Hide the cursor and buttons after a few still seconds.
+// The controls stay up longer on arrival so people notice them.
 let idleTimer;
-function wake() {
+function wake(delay = 2500) {
   document.body.classList.remove("idle");
   clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => document.body.classList.add("idle"), 2500);
+  idleTimer = setTimeout(() => document.body.classList.add("idle"), delay);
 }
-addEventListener("pointermove", wake);
-addEventListener("keydown", wake);
-wake();
+addEventListener("pointermove", () => wake());
+addEventListener("keydown", () => wake());
+wake(6000);
 
 // Read-only peek at the state, plus a way to force the rare event, for the test suite.
 if (new URLSearchParams(location.search).has("test")) {

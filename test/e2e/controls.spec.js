@@ -44,9 +44,11 @@ test("the full screen button and F key request full screen, and the icon follows
   expect(await page.evaluate(() => window.fullscreenRequests)).toEqual(["enter", "exit"]);
 });
 
-test("the cursor and buttons hide when idle and come back on movement", async ({ page }) => {
+test("the controls show for a while on arrival, hide when idle and come back on movement", async ({ page }) => {
   await openPage(page);
-  await page.clock.runFor(3000);
+  await page.clock.runFor(4000);
+  await expect(page.locator("#fullscreen")).toBeVisible();
+  await page.clock.runFor(2500);
   await expect(page.locator("body")).toHaveClass(/idle/);
   await expect(page.locator("#sound")).toBeHidden();
   await page.mouse.move(100, 100);
