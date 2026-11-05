@@ -1,11 +1,15 @@
-# Corner Hit
+# Nothing But Corners
 
-The bouncing DVD logo from idle DVD players, except it only ever lands in the corner.
+The DVD screensaver with the boring parts taken out. It hits the corner every time.
 
-Live: https://joekarlsson.github.io/dvd-corner/
+https://joekarlsson.github.io/nothing-but-corners/
 
-Each run picks a random path that bounces off a few walls and then lands exactly in a corner. Unfold the screen by mirroring it across its walls and the bouncing path becomes a straight line. In that unfolded plane every corner is a grid point `(m·W, n·H)`, and aiming at one with `gcd(m, n) = 1` means the logo passes no other corner on the way (`path.js`).
+Click anywhere to add another logo. Press `S` or click "Sound off" for the crowd.
 
-Press `S` or click "Sound off" to hear the room cheer.
+## How it always hits
 
-Run the tests with `node --test`.
+Mirror the screen across its walls and a bouncing path becomes a straight line. In that unfolded plane every corner is a grid point `(m·W, n·H)`. Aim at one with `gcd(m, n) = 1` and the logo bounces off a few walls, passes no other corner, and lands dead in one (`path.js`). Run the tests with `node --test`.
+
+## Sounds
+
+Cheers in `sounds/` are short cuts from Joe's sound effects library, including Freesound #521900 by mrfossy and #264499 by noah0189.

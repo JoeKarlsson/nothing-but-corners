@@ -3,8 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Corner Hit</title>
-<meta name="description" content="An idle DVD player logo that only ever hits the corner.">
+<title>Nothing But Corners</title>
+<meta name="description" content="The DVD screensaver with the boring parts taken out. It hits the corner every time.">
+<meta property="og:title" content="Nothing But Corners">
+<meta property="og:description" content="The DVD screensaver with the boring parts taken out. It hits the corner every time.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&display=block" rel="stylesheet">
@@ -20,24 +22,26 @@
     background: var(--screen);
     color: var(--osd);
     font: 15px/1.2 Helvetica, Arial, sans-serif;
+    touch-action: manipulation;
+    user-select: none;
   }
   body.idle { cursor: none; }
-  #logo {
+  #flash, #stage, #burst {
     position: fixed;
+    inset: 0;
+    pointer-events: none;
+  }
+  #flash { opacity: 0; }
+  #burst { width: 100%; height: 100%; }
+  .logo {
+    position: absolute;
     top: 0;
     left: 0;
     width: clamp(140px, 20vw, 300px);
     aspect-ratio: 2 / 1;
-    color: #ff4fd8;
     will-change: transform;
   }
-  #logo svg { display: block; width: 100%; height: 100%; }
-  #flash {
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    opacity: 0;
-  }
+  .logo svg { display: block; width: 100%; height: 100%; }
   #osd {
     position: fixed;
     left: 16px;
@@ -46,8 +50,8 @@
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    transition: visibility 0s 0.4s;
   }
+  #count { display: inline-block; transform-origin: left bottom; }
   body.idle #osd button { visibility: hidden; }
   #osd button {
     font: inherit;
@@ -61,23 +65,29 @@
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position: absolute" aria-hidden="true">
+  <defs>
+    <mask id="disc-cutout">
+      <rect width="200" height="100" fill="#fff"/>
+      <text x="100" y="86.5" text-anchor="middle" font-family="Helvetica, Arial, sans-serif"
+            font-weight="700" font-size="15" letter-spacing="5" fill="#000">VIDEO</text>
+    </mask>
+  </defs>
+</svg>
+<template id="logo-template">
+  <div class="logo" role="img" aria-label="DVD Video logo">
+    <svg viewBox="0 0 200 100" fill="currentColor">
+      <g transform="translate(15 0) skewX(-15)">
+        <text x="100" y="62" text-anchor="middle" font-family="'Archivo Black', 'Arial Black', sans-serif"
+              font-size="66" textLength="176" lengthAdjust="spacingAndGlyphs">DVD</text>
+      </g>
+      <ellipse cx="100" cy="81" rx="94" ry="15" mask="url(#disc-cutout)"/>
+    </svg>
+  </div>
+</template>
 <div id="flash"></div>
-<div id="logo" aria-label="DVD Video logo" role="img">
-  <svg viewBox="0 0 200 100" fill="currentColor">
-    <defs>
-      <mask id="disc-cutout">
-        <rect width="200" height="100" fill="#fff"/>
-        <text x="100" y="86.5" text-anchor="middle" font-family="Helvetica, Arial, sans-serif"
-              font-weight="700" font-size="15" letter-spacing="5" fill="#000">VIDEO</text>
-      </mask>
-    </defs>
-    <g transform="translate(15 0) skewX(-15)">
-      <text x="100" y="62" text-anchor="middle" font-family="'Archivo Black', 'Arial Black', sans-serif"
-            font-size="66" textLength="176" lengthAdjust="spacingAndGlyphs">DVD</text>
-    </g>
-    <ellipse cx="100" cy="81" rx="94" ry="15" mask="url(#disc-cutout)"/>
-  </svg>
-</div>
+<div id="stage"></div>
+<canvas id="burst"></canvas>
 <div id="osd">
   <span id="count" aria-live="polite">0 corners</span>
   <button id="sound" type="button">Sound off</button>
@@ -87,154 +97,255 @@
 import { fold, planCornerRun } from "./path.js";
 
 const COLORS = ["#ff4fd8", "#ff8a1f", "#ffe600", "#00e5ff", "#39ff6a", "#ff2b2b", "#ffffff"];
-const CORNER_FREEZE_MS = 420;
+const CHEERS = ["kids", "wow", "applause", "child-wow", "ooh"].map((name) => `sounds/cheer-${name}.mp3`);
+const CORNER_FREEZE_MS = 380;
+const SLOWMO_WINDOW_SECONDS = 0.55;
+const SLOWMO_FLOOR = 0.28;
 const MAX_FRAME_SECONDS = 0.05;
+const GRAVITY = 1400;
 
-const logo = document.getElementById("logo");
+const stage = document.getElementById("stage");
 const flash = document.getElementById("flash");
+const burstCanvas = document.getElementById("burst");
+const burst = burstCanvas.getContext("2d");
 const countLabel = document.getElementById("count");
 const soundButton = document.getElementById("sound");
+const logoTemplate = document.getElementById("logo-template");
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 let width, height, speed;
-let unfoldedX = 0, unfoldedY = 0;
-let run, distanceTravelled, nextBounce;
-let colorIndex = 0;
 let corners = 0;
-let frozenUntil = 0;
 let lastTime = performance.now();
+const logos = [];
+const particles = [];
+
+function randomColorIndex(except) {
+  let next;
+  do next = Math.floor(Math.random() * COLORS.length); while (next === except);
+  return next;
+}
 
 function measure() {
-  const box = logo.getBoundingClientRect();
+  const box = logos[0].element.getBoundingClientRect();
   width = Math.max(1, innerWidth - box.width);
   height = Math.max(1, innerHeight - box.height);
   speed = 0.2 * Math.hypot(innerWidth, innerHeight);
+  const scale = devicePixelRatio || 1;
+  burstCanvas.width = innerWidth * scale;
+  burstCanvas.height = innerHeight * scale;
+  burst.setTransform(scale, 0, 0, scale, 0, 0);
 }
 
-function startRun() {
-  run = planCornerRun(unfoldedX, unfoldedY, width, height);
-  distanceTravelled = 0;
-  nextBounce = 0;
+function addLogo(x, y) {
+  const element = logoTemplate.content.firstElementChild.cloneNode(true);
+  stage.append(element);
+  const logo = { element, svg: element.firstElementChild, x, y, colorIndex: randomColorIndex(-1), frozenUntil: 0 };
+  element.style.color = COLORS[logo.colorIndex];
+  logos.push(logo);
+  return logo;
 }
 
-function changeColor() {
-  let next;
-  do next = Math.floor(Math.random() * COLORS.length); while (next === colorIndex);
-  colorIndex = next;
-  logo.style.color = COLORS[colorIndex];
+function startRun(logo) {
+  logo.run = planCornerRun(logo.x, logo.y, width, height);
+  logo.travelled = 0;
+  logo.nextBounce = 0;
 }
 
-function draw() {
-  logo.style.transform = `translate(${fold(unfoldedX, width)}px, ${fold(unfoldedY, height)}px)`;
+function recolor(logo) {
+  logo.colorIndex = randomColorIndex(logo.colorIndex);
+  logo.element.style.color = COLORS[logo.colorIndex];
 }
 
-function hitCorner(now) {
-  changeColor();
+function draw(logo) {
+  logo.element.style.transform = `translate(${fold(logo.x, width)}px, ${fold(logo.y, height)}px)`;
+}
+
+// The payoff. Everything here happens in the same instant so it lands as one hit.
+function hitCorner(logo, now) {
+  recolor(logo);
+  const color = COLORS[logo.colorIndex];
+  const left = fold(logo.x, width) < width / 2;
+  const top = fold(logo.y, height) < height / 2;
+  const towardX = left ? -1 : 1;
+  const towardY = top ? -1 : 1;
+
   corners += 1;
   countLabel.textContent = corners === 1 ? "1 corner" : `${corners} corners`;
-  frozenUntil = now + CORNER_FREEZE_MS;
-  if (!reduceMotion) {
-    flash.style.background = COLORS[colorIndex];
-    flash.animate([{ opacity: 0.6 }, { opacity: 0 }], { duration: 700, easing: "ease-out" });
-    logo.firstElementChild.animate(
-      [{ transform: "scale(1.18)" }, { transform: "scale(0.94)" }, { transform: "scale(1)" }],
-      { duration: CORNER_FREEZE_MS + 200, easing: "ease-out" }
-    );
+  logo.frozenUntil = now + CORNER_FREEZE_MS;
+  navigator.vibrate?.(35);
+  if (soundOn) playCorner();
+  if (reduceMotion) return;
+
+  logo.svg.style.transformOrigin = `${left ? 0 : 100}% ${top ? 0 : 100}%`;
+  logo.svg.animate(
+    [
+      { transform: "scale(1.22, 0.78)", color: "#000" },
+      { transform: "scale(0.86, 1.14)", color: "#000", offset: 0.25 },
+      { transform: "scale(1.06, 0.96)", color, offset: 0.55 },
+      { transform: "scale(1)", color },
+    ],
+    { duration: CORNER_FREEZE_MS + 260, easing: "ease-out" }
+  );
+  flash.style.background = color;
+  flash.animate(
+    [{ opacity: 1 }, { opacity: 1, offset: 0.12 }, { opacity: 0 }],
+    { duration: 560, easing: "ease-out" }
+  );
+  const kick = 18;
+  stage.animate(
+    [
+      { transform: `translate(${towardX * kick}px, ${towardY * kick}px)` },
+      { transform: `translate(${-towardX * kick * 0.5}px, ${-towardY * kick * 0.5}px)` },
+      { transform: `translate(${towardX * kick * 0.25}px, ${towardY * kick * 0.25}px)` },
+      { transform: "translate(0, 0)" },
+    ],
+    { duration: 320, easing: "ease-out" }
+  );
+  countLabel.animate([{ transform: "scale(1.6)" }, { transform: "scale(1)" }], { duration: 420, easing: "ease-out" });
+  sprayConfetti(left ? 0 : innerWidth, top ? 0 : innerHeight, -towardX, -towardY);
+}
+
+function sprayConfetti(x, y, inwardX, inwardY) {
+  const aim = Math.atan2(inwardY, inwardX);
+  const reach = Math.hypot(innerWidth, innerHeight);
+  for (let i = 0; i < 80; i++) {
+    const angle = aim + (Math.random() - 0.5) * 1.5;
+    const launch = reach * (0.35 + Math.random() * 0.75);
+    particles.push({
+      x, y,
+      vx: Math.cos(angle) * launch,
+      vy: Math.sin(angle) * launch,
+      size: 5 + Math.random() * 9,
+      spin: Math.random() * Math.PI,
+      spinRate: (Math.random() - 0.5) * 20,
+      color: COLORS[Math.floor(Math.random() * COLORS.length)],
+    });
   }
-  if (soundOn) playCheer();
+}
+
+function updateConfetti(seconds) {
+  burst.clearRect(0, 0, innerWidth, innerHeight);
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.vx *= 1 - 1.6 * seconds;
+    p.vy = p.vy * (1 - 1.6 * seconds) + GRAVITY * seconds;
+    p.x += p.vx * seconds;
+    p.y += p.vy * seconds;
+    p.spin += p.spinRate * seconds;
+    if (p.y > innerHeight + 40 || p.x < -40 || p.x > innerWidth + 40) {
+      particles.splice(i, 1);
+      continue;
+    }
+    burst.save();
+    burst.translate(p.x, p.y);
+    burst.rotate(p.spin);
+    burst.fillStyle = p.color;
+    burst.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+    burst.restore();
+  }
+}
+
+function moveLogo(logo, now, seconds) {
+  if (now < logo.frozenUntil) return;
+  // Slow down for the last moment before the corner, so everyone gets to lean in.
+  const secondsLeft = (logo.run.length - logo.travelled) / speed;
+  const slowmo = secondsLeft < SLOWMO_WINDOW_SECONDS
+    ? SLOWMO_FLOOR + (1 - SLOWMO_FLOOR) * (secondsLeft / SLOWMO_WINDOW_SECONDS)
+    : 1;
+  logo.travelled += speed * seconds * slowmo;
+  const progress = Math.min(logo.travelled / logo.run.length, 1);
+  while (logo.nextBounce < logo.run.bounces.length && logo.run.bounces[logo.nextBounce] <= progress) {
+    logo.nextBounce += 1;
+    recolor(logo);
+  }
+  logo.x = logo.run.x0 + (logo.run.x1 - logo.run.x0) * progress;
+  logo.y = logo.run.y0 + (logo.run.y1 - logo.run.y0) * progress;
+  draw(logo);
+  if (progress === 1) {
+    hitCorner(logo, now);
+    startRun(logo);
+  }
 }
 
 function tick(now) {
   const seconds = Math.min((now - lastTime) / 1000, MAX_FRAME_SECONDS);
   lastTime = now;
-  if (now >= frozenUntil) {
-    distanceTravelled += speed * seconds;
-    const progress = Math.min(distanceTravelled / run.length, 1);
-    while (nextBounce < run.bounces.length && run.bounces[nextBounce] <= progress) {
-      nextBounce += 1;
-      changeColor();
-    }
-    unfoldedX = run.x0 + (run.x1 - run.x0) * progress;
-    unfoldedY = run.y0 + (run.y1 - run.y0) * progress;
-    draw();
-    if (progress === 1) {
-      hitCorner(now);
-      startRun();
-    }
-  }
+  for (const logo of logos) moveLogo(logo, now, seconds);
+  if (particles.length) updateConfetti(seconds);
   requestAnimationFrame(tick);
 }
 
 addEventListener("resize", () => {
-  const x = fold(unfoldedX, width);
-  const y = fold(unfoldedY, height);
+  const folded = logos.map((logo) => [fold(logo.x, width), fold(logo.y, height)]);
   measure();
-  unfoldedX = Math.min(x, width);
-  unfoldedY = Math.min(y, height);
-  startRun();
-  draw();
+  logos.forEach((logo, i) => {
+    logo.x = Math.min(folded[i][0], width);
+    logo.y = Math.min(folded[i][1], height);
+    startRun(logo);
+    draw(logo);
+  });
 });
 
-// Sound: a bright "ding" and a burst of synthesized applause, for the
-// moment everyone in the room was waiting for.
+// Every click drops in another logo, centered on the pointer.
+addEventListener("pointerdown", (event) => {
+  if (event.target.closest("button")) return;
+  const box = logos[0].element.getBoundingClientRect();
+  const x = Math.min(Math.max(event.clientX - box.width / 2, 0), width);
+  const y = Math.min(Math.max(event.clientY - box.height / 2, 0), height);
+  const logo = addLogo(x, y);
+  startRun(logo);
+  draw(logo);
+  if (!reduceMotion) {
+    logo.svg.animate([{ transform: "scale(0)" }, { transform: "scale(1.15)" }, { transform: "scale(1)" }],
+      { duration: 280, easing: "ease-out" });
+  }
+});
+
+// Sound: a low thump for the impact, then one of a few short cheers, never the same twice in a row.
 let soundOn = false;
 let audio;
+let cheerBuffers;
+let lastCheer = -1;
 
-soundButton.addEventListener("click", () => {
+soundButton.addEventListener("click", async () => {
   soundOn = !soundOn;
   soundButton.textContent = soundOn ? "Sound on" : "Sound off";
-  if (soundOn) {
-    audio ??= new AudioContext();
-    audio.resume();
-  }
+  if (!soundOn) return;
+  audio ??= new AudioContext();
+  await audio.resume();
+  cheerBuffers ??= await Promise.all(CHEERS.map(async (url) => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Could not load ${url}: ${response.status}`);
+    return audio.decodeAudioData(await response.arrayBuffer());
+  }));
 });
 addEventListener("keydown", (event) => {
   if (event.key === "s" || event.key === "S") soundButton.click();
 });
 
-function playCheer() {
+function playCorner() {
+  if (!cheerBuffers) return;
   const now = audio.currentTime;
-  const out = audio.createGain();
-  out.gain.value = 0.5;
-  out.connect(audio.destination);
 
-  [880, 1320, 1760].forEach((frequency, i) => {
-    const tone = audio.createOscillator();
-    const gain = audio.createGain();
-    tone.type = "triangle";
-    tone.frequency.value = frequency;
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.25 / (i + 1), now + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
-    tone.connect(gain).connect(out);
-    tone.start(now);
-    tone.stop(now + 1.3);
-  });
+  const thump = audio.createOscillator();
+  const thumpLevel = audio.createGain();
+  thump.frequency.setValueAtTime(160, now);
+  thump.frequency.exponentialRampToValueAtTime(42, now + 0.18);
+  thumpLevel.gain.setValueAtTime(0.9, now);
+  thumpLevel.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+  thump.connect(thumpLevel).connect(audio.destination);
+  thump.start(now);
+  thump.stop(now + 0.3);
 
-  const seconds = 2.4;
-  const rate = audio.sampleRate;
-  const buffer = audio.createBuffer(1, Math.floor(rate * seconds), rate);
-  const samples = buffer.getChannelData(0);
-  for (let clap = 0; clap < 700; clap++) {
-    const start = Math.random() * seconds * 0.9;
-    const swell = Math.min(1, start / 0.12) * Math.exp(-start / 0.9);
-    const length = Math.floor(rate * (0.008 + Math.random() * 0.02));
-    const amplitude = swell * (0.3 + Math.random() * 0.7);
-    const offset = Math.floor(start * rate);
-    for (let i = 0; i < length && offset + i < samples.length; i++) {
-      samples[offset + i] += (Math.random() * 2 - 1) * amplitude * Math.exp(-i / (length * 0.25));
-    }
-  }
-  const applause = audio.createBufferSource();
-  applause.buffer = buffer;
-  const band = audio.createBiquadFilter();
-  band.type = "bandpass";
-  band.frequency.value = 1800;
-  band.Q.value = 0.6;
-  const level = audio.createGain();
-  level.gain.value = 0.18;
-  applause.connect(band).connect(level).connect(out);
-  applause.start(now + 0.05);
+  let pick;
+  do pick = Math.floor(Math.random() * cheerBuffers.length); while (pick === lastCheer && cheerBuffers.length > 1);
+  lastCheer = pick;
+  const cheer = audio.createBufferSource();
+  const cheerLevel = audio.createGain();
+  cheer.buffer = cheerBuffers[pick];
+  cheerLevel.gain.value = 0.8;
+  cheer.connect(cheerLevel).connect(audio.destination);
+  cheer.start(now + 0.02);
 }
 
 // Hide the cursor and button after a few still seconds, like a screensaver.
@@ -249,9 +360,10 @@ addEventListener("keydown", wake);
 wake();
 
 document.fonts.ready.then(() => {
+  const first = addLogo(0, 0);
   measure();
-  startRun();
-  draw();
+  startRun(first);
+  draw(first);
   lastTime = performance.now();
   requestAnimationFrame(tick);
 });
