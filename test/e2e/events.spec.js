@@ -42,7 +42,7 @@ test("jackpot: every logo hits a corner in the same frame", async ({ page }) => 
   await expect(page.locator("#banner-text")).toHaveText("Jackpot");
 });
 
-test("too many logos: jam, ki blast, the giant bounces all four corners, stops, crawls into a fifth, then resets", async ({ page }) => {
+test("too many logos: jam, ki blast, four-corner tour, then a leviathan drifts into two more corners, then resets", async ({ page }) => {
   const errors = await openPage(page);
   for (let i = 0; i < 48; i++) await page.mouse.click(100 + ((i * 37) % 1000), 100 + ((i * 53) % 500));
   expect((await readState(page)).mode).toBe("play");
@@ -81,11 +81,32 @@ test("too many logos: jam, ki blast, the giant bounces all four corners, stops, 
   expect(Math.abs(middle.x - 640)).toBeLessThan(40);
   expect(Math.abs(middle.y - 360)).toBeLessThan(40);
 
-  // Then it crawls slowly into one last corner: the fifth hit.
-  await sampleUntil(page, (s) => s.mode === "crawl", { maxMs: 2000 });
-  const crawl = await sampleUntil(page, (s) => s.mode === "landing", { maxMs: 4000 });
-  expect(crawl.length * 16).toBeGreaterThan(1500); // slowly
-  expect((await readState(page)).corners).toBe(corners + 5);
+  // Then it swells into a leviathan and drifts, slowly and at one steady
+  // pace, into two more corners: the fifth and sixth hits.
+  await sampleUntil(page, (s) => s.mode === "drift", { maxMs: 2000 });
+  const giantBox = () => page.locator(".logo").evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return { x: box.x, y: box.y, width: box.width };
+  });
+  expect((await giantBox()).width).toBeGreaterThan(900);
+  const path = [];
+  let state = await readState(page);
+  while (state.mode === "drift" && path.length < 2000) {
+    path.push({ ...(await giantBox()), corners: state.corners });
+    await page.clock.runFor(16);
+    state = await readState(page);
+  }
+  expect(state.mode).toBe("landing");
+  expect(state.corners).toBe(corners + 6);
+  // Steady pace: per-frame speed stays the same from start to finish, apart
+  // from the one frame where it turns at the fifth corner.
+  const speeds = path.slice(1).map((p, i) => Math.hypot(p.x - path[i].x, p.y - path[i].y) / 0.016);
+  const turn = path.findIndex((p) => p.corners === corners + 5);
+  const steady = speeds.filter((_, i) => Math.abs(i + 1 - turn) > 2 && i > 1);
+  expect(Math.min(...steady) / Math.max(...steady)).toBeGreaterThan(0.8);
+  const average = steady.reduce((sum, speed) => sum + speed, 0) / steady.length;
+  expect(average).toBeGreaterThan(80); // slow,
+  expect(average).toBeLessThan(170); // but moving
 
   // The shatter runs its course, and the giant shrinks back into a normal
   // logo in that corner. Its shrink is a CSS animation, which runs on real
@@ -116,6 +137,6 @@ test("the whole meltdown runs on a real clock without errors", async ({ page }) 
   });
   expect(await page.evaluate(() => window.nothingButCorners.mode)).toBe("jam");
   await page.waitForFunction(() => window.nothingButCorners.mode === "play", null, { timeout: 20_000 });
-  expect(await page.evaluate(() => window.nothingButCorners.corners)).toBeGreaterThanOrEqual(5);
+  expect(await page.evaluate(() => window.nothingButCorners.corners)).toBeGreaterThanOrEqual(6);
   expect(errors).toEqual([]);
 });

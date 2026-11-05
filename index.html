@@ -159,8 +159,11 @@ const SQUEEZE_MS = 260; // anticipation: the ball shrinks back, everything freez
 const FIRE_MS = 170; // the giant logo blasts across the screen
 const BOUNCE_MS = 420; // each bounce between the four corners
 const TO_MIDDLE_MS = 520; // off the fourth corner, braking to a dead stop in the middle
-const WINDUP_MS = 900; // stopped in the middle, winding up
-const CRAWL_MS = 1900; // then slowly into one last corner
+const WINDUP_MS = 900; // stopped in the middle, winding up and swelling into a leviathan
+// The leviathan: nearly screen-sized, drifting at one slow, steady speed
+// (a fraction of the screen diagonal per second) into two corners.
+const LEVIATHAN_SPEED = 0.085;
+const LEVIATHAN_IMPACT = [["#ff2b2b", "#000"], ["#000", "#ff2b2b"], ["#ff2b2b", "#000"]];
 const IMPACT_FRAME_MS = 50; // each flat two-color impact frame
 const DOME_EXPAND_MS = 520;
 const DOME_HOLD_MS = 450;
@@ -210,7 +213,7 @@ const domes = []; // the first corner's explosion and its chain explosions
 let shatter = null; // the second corner's explosion
 let effectsOnCanvas = false;
 let auraOnCanvas = false;
-let mode = "play"; // play, jam, charge, fire, bounce, windup, crawl, landing
+let mode = "play"; // play, jam, charge, fire, bounce, windup, drift, landing
 let jackpot = null;
 let giant = null;
 
@@ -745,7 +748,10 @@ function moveGiant(now) {
   giant.y = y;
   giant.element.style.transform = `translate(${x}px, ${y}px)`;
   giant.svg.style.transformOrigin = "50% 50%";
-  giant.svg.style.transform = along(giant.angle ?? 0, 1 + 0.8 * smear, 1 - 0.25 * smear);
+  // The leviathan sways slowly as it drifts, and the ground trembles under it.
+  const sway = giant.leviathan && !reduceMotion ? ` rotate(${Math.sin(now / 700) * 1.5}deg)` : "";
+  giant.svg.style.transform = along(giant.angle ?? 0, 1 + 0.8 * smear, 1 - 0.25 * smear) + sway;
+  if (giant.leviathan && !reduceMotion) stage.style.transform = `translate(${(Math.random() - 0.5) * 3}px, ${(Math.random() - 0.5) * 3}px)`;
   giant.tipX = x + giant.width / 2;
   giant.tipY = y + giant.height / 2;
   if (progress === 1) {
@@ -790,10 +796,15 @@ function bounceCorner(index) {
 }
 
 // Stopped dead in the middle: squash down and tremble while the sound builds
-// (anticipation), then crawl slowly into one last corner.
+// (anticipation), and swell into a leviathan.
 function windUp() {
   mode = "windup";
   playWindUpSound();
+  giant.growth = {
+    start: performance.now(),
+    from: giant.width,
+    to: Math.min(innerWidth * 0.82, innerHeight * 1.5),
+  };
   if (!reduceMotion) {
     const shake = Array.from({ length: 18 }, (_, i) => {
       const t = i / 17;
@@ -807,21 +818,66 @@ function windUp() {
     giant.svg.style.transformOrigin = "50% 50%";
     giant.svg.animate(shake, { duration: WINDUP_MS, fill: "forwards" });
   }
-  setTimeout(() => {
-    mode = "crawl";
-    giant.svg.getAnimations().forEach((animation) => animation.cancel());
-    const left = Math.random() < 0.5;
-    const top = Math.random() < 0.5;
-    // Slow start, slow finish: it eases out of the middle and brakes in.
-    const ease = (p) => (p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2);
-    sendGiant(giantCorner(left, top), CRAWL_MS, ease, () => finalCorner(left, top));
-  }, WINDUP_MS);
+  setTimeout(drift, WINDUP_MS);
+}
+
+// Grow from the middle outward while it winds up.
+function growGiant(now) {
+  const { start, from, to } = giant.growth;
+  const t = Math.min(1, since(start, now) / WINDUP_MS);
+  giant.width = from + (to - from) * (1 - (1 - t) ** 3);
+  giant.height = giant.width / 2;
+  giant.element.style.width = `${giant.width}px`;
+  const middle = giantMiddle();
+  giant.x = middle.x;
+  giant.y = middle.y;
+  giant.element.style.transform = `translate(${middle.x}px, ${middle.y}px)`;
+  if (t === 1) giant.growth = null;
+}
+
+// The leviathan drifts into one corner and on into the opposite one, at one
+// slow, steady speed the whole way: no braking, no rush.
+function drift() {
+  mode = "drift";
+  if (giant.growth) growGiant(giant.growth.start + WINDUP_MS); // finish growing exactly
+  giant.svg.getAnimations().forEach((animation) => animation.cancel());
+  giant.leviathan = true;
+  playLeviathanSound();
+  const left = Math.random() < 0.5;
+  const top = Math.random() < 0.5;
+  const pace = LEVIATHAN_SPEED * Math.hypot(innerWidth, innerHeight);
+  const steady = (p) => p;
+  const durationTo = (to) => (Math.hypot(to.x - giant.x, to.y - giant.y) / pace) * 1000;
+  const first = giantCorner(left, top);
+  sendGiant(first, durationTo(first), steady, () => {
+    leviathanCorner(left, top);
+    const second = giantCorner(!left, !top);
+    sendGiant(second, durationTo(second), steady, () => finalCorner(!left, !top));
+  });
+}
+
+// The leviathan's first corner: red impact frames and a dome explosion
+// behind it, and it keeps drifting on without changing pace.
+function leviathanCorner(left, top) {
+  const now = performance.now();
+  countGiantCorner();
+  domes.length = 0;
+  navigator.vibrate?.([250, 60, 250]);
+  playBounceCornerSound();
+  playThump(3);
+  const cornerX = left ? 0 : innerWidth;
+  const cornerY = top ? 0 : innerHeight;
+  if (!reduceMotion) impactFlash = { start: now, x: cornerX, y: cornerY, frames: LEVIATHAN_IMPACT };
+  setTimeout(() => startDomes(cornerX, cornerY), IMPACT_FRAME_MS * LEVIATHAN_IMPACT.length);
 }
 
 // The last corner: the loudest impact frames, then the shatter.
 function finalCorner(left, top) {
   mode = "landing";
   const now = performance.now();
+  giant.leviathan = false;
+  stage.style.transform = "";
+  giant.drone?.stop();
   giant.left = left;
   giant.top = top;
   countGiantCorner();
@@ -1035,6 +1091,7 @@ function tick(now) {
     for (const logo of logos) moveLogo(logo, seconds);
     if (jackpot && jackpot.logos.size === 0) jackpotFinale();
   }
+  if (giant?.growth) growGiant(now);
   if (giant?.leg) moveGiant(now);
   renderAura(now, seconds);
   renderEffects(now, seconds);
@@ -1183,7 +1240,7 @@ function playBounceCornerSound() {
 }
 
 // The rumble comes back while the giant winds up in the middle, and cuts out
-// as it starts its crawl.
+// as it starts to drift.
 function playWindUpSound() {
   if (!sounds) return;
   const now = audio.currentTime;
@@ -1198,6 +1255,24 @@ function playWindUpSound() {
   rumble.connect(level).connect(audio.destination);
   rumble.start(now);
   rumble.stop(now + seconds);
+}
+
+// A deep drone under the leviathan for as long as it drifts.
+function playLeviathanSound() {
+  if (!sounds) return;
+  const now = audio.currentTime;
+  const drone = audio.createOscillator();
+  const filter = audio.createBiquadFilter();
+  const level = audio.createGain();
+  drone.type = "sawtooth";
+  drone.frequency.value = 38;
+  filter.type = "lowpass";
+  filter.frequency.value = 220;
+  level.gain.setValueAtTime(0.001, now);
+  level.gain.exponentialRampToValueAtTime(0.35, now + 0.6);
+  drone.connect(filter).connect(level).connect(audio.destination);
+  drone.start(now);
+  giant.drone = drone;
 }
 
 function playFireSound() {
