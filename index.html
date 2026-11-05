@@ -38,7 +38,8 @@
     pointer-events: none;
   }
   #flash { opacity: 0; }
-  #burst { width: 100%; height: 100%; }
+  #burst, #aura { width: 100%; height: 100%; }
+  #aura { position: absolute; inset: 0; }
   #banner {
     display: grid;
     place-items: center;
@@ -104,7 +105,7 @@
   </div>
 </template>
 <div id="flash"></div>
-<div id="stage"></div>
+<div id="stage"><canvas id="aura"></canvas></div>
 <canvas id="burst"></canvas>
 <div id="banner"><span id="banner-text"></span></div>
 <div id="osd">
@@ -147,14 +148,22 @@ const GRAVITY = 1400;
 // Rare event: every logo on screen hits a corner in the same instant.
 const JACKPOT_CHANCE = 1 / 35;
 const JACKPOT_MIN_LOGOS = 4;
-// Too many logos: the player jams, then everything implodes, anime style,
-// into one point, and a giant logo bursts out of it.
+// Too many logos: the player jams, then a ki blast. Every logo streams into
+// one energy ball, it squeezes back, fires a giant logo into a corner, and
+// the corner explodes. Long build, short release, long reaction.
 const OVERLOAD_LOGOS = 50;
 const JAM_MS = 1500;
-const IMPLODE_MS = 1400; // spiral in, speed lines, debris sucked to the middle
-const COLLAPSE_HOLD_MS = 220; // a beat of total silence on one bright dot
-const IMPACT_FRAME_MS = 60; // each black/white impact frame
-const IMPACT_FRAMES = ["#fff", "#000", "#fff", "#000"];
+const CHARGE_MS = 2000; // logos stream into the ball, then it crackles at full size
+const STREAM_MS = 1400; // when the last logo has been absorbed
+const SQUEEZE_MS = 260; // anticipation: the ball shrinks back, everything freezes, silence
+const FIRE_MS = 170; // the giant logo blasts across the screen
+const IMPACT_FRAME_MS = 50; // each black/white impact frame
+const IMPACT_FRAMES = 3;
+const DOME_EXPAND_MS = 420;
+const DOME_HOLD_MS = 380;
+const DOME_FADE_MS = 900;
+const KI = { aura: "#ff4fd8", ring: "#ffe600", core: "#ffffff" };
+const DOME_LAYERS = [[1, "#ff8a1f"], [0.8, "#ff4fd8"], [0.6, "#ffe600"], [0.4, "#ffffff"]];
 
 const stage = document.getElementById("stage");
 const flash = document.getElementById("flash");
@@ -162,6 +171,8 @@ const banner = document.getElementById("banner");
 const bannerText = document.getElementById("banner-text");
 const burstCanvas = document.getElementById("burst");
 const burst = burstCanvas.getContext("2d");
+const auraCanvas = document.getElementById("aura");
+const aura = auraCanvas.getContext("2d");
 const countLabel = document.getElementById("count");
 const soundButton = document.getElementById("sound");
 const fullscreenButton = document.getElementById("fullscreen");
@@ -174,10 +185,14 @@ let lastTime = performance.now();
 let logos = [];
 const particles = [];
 const rings = [];
-let implosion = null; // { start } while everything is getting sucked in
-let collapseDot = null; // { start } during the silent beat
+const rocks = []; // debris floating up while the ball charges
+let charge = null; // the energy ball while logos stream in
+let blast = null; // the beam behind the giant logo as it fires
+let impactStart = null; // the black/white impact frames
+let dome = null; // the explosion in the corner
 let effectsOnCanvas = false;
-let mode = "play"; // play, jam, merge, giant, landing
+let auraOnCanvas = false;
+let mode = "play"; // play, jam, charge, fire, landing
 let jackpot = null;
 let giant = null;
 
@@ -193,9 +208,11 @@ function measure() {
   height = Math.max(1, innerHeight - logoHeight);
   speed = 0.2 * Math.hypot(innerWidth, innerHeight);
   const scale = devicePixelRatio || 1;
-  burstCanvas.width = innerWidth * scale;
-  burstCanvas.height = innerHeight * scale;
-  burst.setTransform(scale, 0, 0, scale, 0, 0);
+  for (const [canvas, context] of [[burstCanvas, burst], [auraCanvas, aura]]) {
+    canvas.width = innerWidth * scale;
+    canvas.height = innerHeight * scale;
+    context.setTransform(scale, 0, 0, scale, 0, 0);
+  }
 }
 
 function createLogoElement() {
@@ -323,46 +340,32 @@ function spray(x, y, aim, spread, count, power = 1) {
   }
 }
 
-// Everything drawn on the effects canvas: confetti, speed lines, debris,
-// the collapse dot and shockwave rings.
+// The top canvas: the explosion dome, impact starburst, shockwaves, confetti.
 function renderEffects(now, seconds) {
-  const active = particles.length || rings.length || implosion || collapseDot;
+  const active = particles.length || rings.length || dome || impactStart !== null;
   if (!active && !effectsOnCanvas) return;
   burst.clearRect(0, 0, innerWidth, innerHeight);
   effectsOnCanvas = Boolean(active);
-  if (implosion) drawImplosion(now);
-  if (collapseDot) drawCollapseDot(now);
+  if (dome) drawDome(now);
+  if (impactStart !== null) drawStarburst(now);
   updateRings(seconds);
   updateParticles(seconds);
 }
 
+// The canvas under the logos: rising rocks, the energy ball and the beam.
+function renderAura(now, seconds) {
+  const active = charge || blast || rocks.length;
+  if (!active && !auraOnCanvas) return;
+  aura.clearRect(0, 0, innerWidth, innerHeight);
+  auraOnCanvas = Boolean(active);
+  updateRocks(seconds);
+  if (blast) drawBeam(now);
+  if (charge) drawCharge(now);
+}
+
 function updateParticles(seconds) {
-  const centerX = innerWidth / 2;
-  const centerY = innerHeight / 2;
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
-    if (p.sucked) {
-      // Debris pulled into the middle, drawn as streaks along its velocity.
-      const dx = centerX - p.x;
-      const dy = centerY - p.y;
-      const distance = Math.hypot(dx, dy);
-      if (distance < 24 || !implosion) {
-        particles.splice(i, 1);
-        continue;
-      }
-      p.vx += (dx / distance) * 5200 * seconds;
-      p.vy += (dy / distance) * 5200 * seconds;
-      p.x += p.vx * seconds;
-      p.y += p.vy * seconds;
-      const streak = Math.min(90, 6 + Math.hypot(p.vx, p.vy) * 0.04);
-      burst.save();
-      burst.translate(p.x, p.y);
-      burst.rotate(Math.atan2(p.vy, p.vx));
-      burst.fillStyle = p.color;
-      burst.fillRect(-streak, -1.5, streak, 3);
-      burst.restore();
-      continue;
-    }
     p.vx *= 1 - 1.6 * seconds;
     p.vy = p.vy * (1 - 1.6 * seconds) + GRAVITY * seconds;
     p.x += p.vx * seconds;
@@ -379,6 +382,38 @@ function updateParticles(seconds) {
     burst.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
     burst.restore();
   }
+}
+
+function updateRings(seconds) {
+  const outer = Math.hypot(innerWidth, innerHeight);
+  for (let i = rings.length - 1; i >= 0; i--) {
+    const ring = rings[i];
+    ring.radius += ring.speed * seconds;
+    ring.speed *= 1 - 1.2 * seconds;
+    ring.width *= 1 - 2.2 * seconds;
+    if (ring.radius > outer || ring.width < 0.5) {
+      rings.splice(i, 1);
+      continue;
+    }
+    burst.strokeStyle = ring.color;
+    burst.lineWidth = ring.width;
+    burst.beginPath();
+    burst.arc(ring.x, ring.y, ring.radius, 0, Math.PI * 2);
+    burst.stroke();
+  }
+}
+
+// A circle with a rough, flame-like edge, redrawn every frame so it flickers.
+function jaggedCircle(context, x, y, radius, roughness, color, points = 30) {
+  context.fillStyle = color;
+  context.beginPath();
+  for (let i = 0; i <= points; i++) {
+    const angle = (i / points) * Math.PI * 2;
+    const r = radius * (1 - roughness / 2 + Math.random() * roughness);
+    if (i === 0) context.moveTo(x + Math.cos(angle) * r, y + Math.sin(angle) * r);
+    else context.lineTo(x + Math.cos(angle) * r, y + Math.sin(angle) * r);
+  }
+  context.fill();
 }
 
 // ---- Normal play ----
@@ -497,212 +532,307 @@ function startJam() {
   setTimeout(() => {
     clearInterval(stutter);
     stage.style.transform = "";
-    startMerge();
+    startCharge();
   }, JAM_MS);
 }
 
-function startMerge() {
-  mode = "merge";
-  playImplosionSound();
-  implosion = { start: performance.now() };
-  const centerX = innerWidth / 2;
-  const centerY = innerHeight / 2;
-  for (const logo of logos) {
-    if (reduceMotion) break;
-    const [x, y] = logo.trail.at(-1);
-    const startX = x + logoWidth / 2 - centerX;
-    const startY = y + logoHeight / 2 - centerY;
-    const startRadius = Math.hypot(startX, startY);
-    const startAngle = Math.atan2(startY, startX);
-    const spin = (Math.random() < 0.5 ? 1 : -1) * (1.5 + Math.random()) * Math.PI;
-    // Spiral in: pull back a little first (anticipation), then accelerate
-    // into the middle, spinning faster and shrinking to nothing.
-    const frames = [];
-    for (let k = 0; k <= 12; k++) {
-      const t = k / 12;
-      const radius = startRadius * (t < 0.2 ? 1 + 0.6 * t : 1.12 * (1 - ((t - 0.2) / 0.8) ** 2));
-      const angle = startAngle + spin * t * t;
-      const scale = t < 0.2 ? 1 + t : Math.max(0.04, 1.2 * (1 - (t - 0.2) / 0.8));
-      frames.push({
-        offset: t,
-        transform: `translate(${centerX + Math.cos(angle) * radius - logoWidth / 2}px, ${centerY + Math.sin(angle) * radius - logoHeight / 2}px) rotate(${spin * t * t}rad) scale(${scale})`,
-        color: t < 0.6 ? logo.element.style.color : "#fff",
-      });
-    }
-    logo.element.animate(frames, { duration: IMPLODE_MS - 200, delay: Math.random() * 200, fill: "forwards" });
-  }
-  const imploded = logos;
+// Charge: every logo streams into one energy ball in the middle, one after
+// another. The ball grows with each one, crackles with lightning, rocks float
+// up off the floor, and the screen rumbles harder and harder.
+function startCharge() {
+  mode = "charge";
+  const fullRadius = Math.min(innerWidth, innerHeight) * 0.15;
+  charge = { start: performance.now(), radius: 4, target: 4, pulse: 0, squeezeStart: null };
+  playChargeSound();
+  const centerX = (innerWidth - logoWidth) / 2;
+  const centerY = (innerHeight - logoHeight) / 2;
+  const absorbed = logos;
   logos = [];
-  setTimeout(() => {
-    imploded.forEach((logo) => logo.element.remove());
-    collapse();
-  }, IMPLODE_MS);
-}
-
-// Speed lines (manga focus lines) closing in on the middle, flickering
-// every frame, plus a shaking screen and debris getting sucked in.
-function drawImplosion(now) {
-  const progress = Math.min(1, (now - implosion.start) / IMPLODE_MS);
-  const centerX = innerWidth / 2;
-  const centerY = innerHeight / 2;
-  const outer = Math.hypot(innerWidth, innerHeight) / 2 + 20;
-  burst.fillStyle = "#fff";
-  const lines = Math.floor(40 + 110 * progress);
-  for (let i = 0; i < lines; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const inner = outer * (0.25 + Math.random() * 0.45) * (1 - 0.75 * progress);
-    const half = (0.004 + Math.random() * 0.012) * (0.6 + progress);
-    burst.beginPath();
-    burst.moveTo(centerX + Math.cos(angle - half) * outer, centerY + Math.sin(angle - half) * outer);
-    burst.lineTo(centerX + Math.cos(angle + half) * outer, centerY + Math.sin(angle + half) * outer);
-    burst.lineTo(centerX + Math.cos(angle) * inner, centerY + Math.sin(angle) * inner);
-    burst.fill();
-  }
-  for (let i = 0; i < 2 + progress * 6; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    particles.push({
-      sucked: true,
-      x: centerX + Math.cos(angle) * outer,
-      y: centerY + Math.sin(angle) * outer,
-      vx: -Math.sin(angle) * 300,
-      vy: Math.cos(angle) * 300,
-      color: COLORS[Math.floor(Math.random() * COLORS.length)],
-    });
-  }
-  const shake = 2 + 16 * progress * progress;
-  stage.style.transform = `translate(${(Math.random() - 0.5) * shake}px, ${(Math.random() - 0.5) * shake}px)`;
-}
-
-// Everything is gone. One bright dot shrinks to a point in total silence.
-function collapse() {
-  implosion = null;
-  stage.style.transform = "";
-  collapseDot = reduceMotion ? null : { start: performance.now() };
-  setTimeout(explode, COLLAPSE_HOLD_MS);
-}
-
-function drawCollapseDot(now) {
-  const progress = Math.min(1, (now - collapseDot.start) / COLLAPSE_HOLD_MS);
-  burst.fillStyle = "#fff";
-  burst.beginPath();
-  burst.arc(innerWidth / 2, innerHeight / 2, 2 + 26 * (1 - progress) ** 2, 0, Math.PI * 2);
-  burst.fill();
-}
-
-// Impact frames, a shockwave and confetti in every direction, and the
-// giant logo bursts out of the point.
-function explode() {
-  collapseDot = null;
-  playExplosionSound();
-  navigator.vibrate?.([120, 40, 200]);
-  if (!reduceMotion) {
-    flash.animate(
-      [...IMPACT_FRAMES.map((background) => ({ opacity: 1, background })), { opacity: 0, background: "#000" }],
-      { duration: IMPACT_FRAME_MS * IMPACT_FRAMES.length, easing: "steps(1, end)" }
-    );
-  }
-  setTimeout(() => {
-    const centerX = innerWidth / 2;
-    const centerY = innerHeight / 2;
+  absorbed.forEach((logo, i) => {
+    const [x, y] = logo.trail.at(-1);
+    const delay = (i / absorbed.length) * (STREAM_MS - 400) + Math.random() * 120;
+    const duration = 380;
     if (!reduceMotion) {
-      rings.push({ x: centerX, y: centerY, radius: 10, speed: 2600, width: 36, color: "#fff" });
-      rings.push({ x: centerX, y: centerY, radius: 0, speed: 1700, width: 18, color: COLORS[0] });
-      rings.push({ x: centerX, y: centerY, radius: 0, speed: 1100, width: 10, color: COLORS[2] });
-      spray(centerX, centerY, 0, Math.PI * 2, 260, 0.8);
-      shakeStage(Math.random() < 0.5 ? -1 : 1, Math.random() < 0.5 ? -1 : 1, 40);
+      logo.element.animate(
+        [
+          { transform: `translate(${x}px, ${y}px) scale(1)` },
+          { transform: `translate(${x + (x - centerX) * 0.1}px, ${y + (y - centerY) * 0.1}px) scale(1.1)`, offset: 0.3 },
+          { transform: `translate(${centerX}px, ${centerY}px) scale(0.05)`, color: "#fff" },
+        ],
+        { duration, delay, easing: "cubic-bezier(.6, 0, .9, .4)", fill: "forwards" }
+      );
     }
-    spawnGiant();
-  }, IMPACT_FRAME_MS * IMPACT_FRAMES.length);
+    setTimeout(() => {
+      logo.element.remove();
+      charge.target += (fullRadius - 4) / absorbed.length;
+      charge.pulse = performance.now();
+      if (i % 5 === 0) playThump(0.6);
+    }, delay + duration);
+  });
+  setTimeout(squeeze, CHARGE_MS);
 }
 
-function updateRings(seconds) {
-  const outer = Math.hypot(innerWidth, innerHeight);
-  for (let i = rings.length - 1; i >= 0; i--) {
-    const ring = rings[i];
-    ring.radius += ring.speed * seconds;
-    ring.speed *= 1 - 1.2 * seconds;
-    ring.width *= 1 - 2.2 * seconds;
-    if (ring.radius > outer || ring.width < 0.5) {
-      rings.splice(i, 1);
+function drawCharge(now) {
+  const x = innerWidth / 2;
+  const y = innerHeight / 2;
+  let radius;
+  if (charge.squeezeStart === null) {
+    charge.radius += (charge.target - charge.radius) * 0.2;
+    const pulse = Math.max(0, 1 - (now - charge.pulse) / 140);
+    radius = charge.radius * (1 + 0.22 * pulse + 0.04 * Math.sin((now - charge.start) / 35));
+    const power = charge.radius / (Math.min(innerWidth, innerHeight) * 0.15);
+    if (!reduceMotion) {
+      const shake = 1 + 10 * power * power;
+      stage.style.transform = `translate(${(Math.random() - 0.5) * shake}px, ${(Math.random() - 0.5) * shake}px)`;
+      drawLightning(x, y, radius, 2 + Math.floor(power * 4));
+      if (Math.random() < 0.3 + power) spawnRock();
+    }
+    charge.auraRoughness = 0.35;
+  } else {
+    // Squeeze: shrink back fast and hold still. Nothing moves, nothing sounds.
+    const s = Math.min(1, (now - charge.squeezeStart) / SQUEEZE_MS);
+    radius = charge.radius * (1 - 0.4 * (1 - (1 - s) ** 3));
+    charge.auraRoughness = 0.12;
+  }
+  jaggedCircle(aura, x, y, radius * 1.5, charge.auraRoughness, KI.aura);
+  jaggedCircle(aura, x, y, radius * 1.12, 0.1, KI.ring, 24);
+  aura.fillStyle = KI.core;
+  aura.beginPath();
+  aura.arc(x, y, radius * 0.8, 0, Math.PI * 2);
+  aura.fill();
+}
+
+function drawLightning(x, y, radius, bolts) {
+  aura.strokeStyle = "#fff";
+  aura.lineWidth = 2.5;
+  aura.lineJoin = "miter";
+  for (let b = 0; b < bolts; b++) {
+    let angle = Math.random() * Math.PI * 2;
+    let distance = radius * 0.9;
+    const reach = radius * (1.6 + Math.random() * 1.6);
+    aura.beginPath();
+    aura.moveTo(x + Math.cos(angle) * distance, y + Math.sin(angle) * distance);
+    while (distance < reach) {
+      distance += reach / 6;
+      angle += (Math.random() - 0.5) * 0.5;
+      aura.lineTo(x + Math.cos(angle) * distance, y + Math.sin(angle) * distance);
+    }
+    aura.stroke();
+  }
+}
+
+function spawnRock() {
+  rocks.push({
+    x: Math.random() * innerWidth,
+    y: innerHeight + 12,
+    vy: -(50 + Math.random() * 130),
+    size: 4 + Math.random() * 10,
+    spin: Math.random() * Math.PI,
+    falling: false,
+  });
+}
+
+// Rocks drift up while charging, hold still during the squeeze, and drop
+// once the blast goes off.
+function updateRocks(seconds) {
+  const frozen = charge?.squeezeStart != null;
+  for (let i = rocks.length - 1; i >= 0; i--) {
+    const rock = rocks[i];
+    if (!frozen) {
+      if (rock.falling) rock.vy += GRAVITY * seconds;
+      rock.y += rock.vy * seconds;
+      rock.spin += seconds * 2;
+    }
+    if (rock.y > innerHeight + 20 || rock.y < -20) {
+      rocks.splice(i, 1);
       continue;
     }
-    burst.strokeStyle = ring.color;
-    burst.lineWidth = ring.width;
-    burst.beginPath();
-    burst.arc(ring.x, ring.y, ring.radius, 0, Math.PI * 2);
-    burst.stroke();
+    const jitter = frozen || rock.falling ? 0 : (Math.random() - 0.5) * 3;
+    aura.save();
+    aura.translate(rock.x + jitter, rock.y);
+    aura.rotate(rock.spin);
+    aura.fillStyle = "#9a9a9a";
+    aura.fillRect(-rock.size / 2, -rock.size / 2, rock.size, rock.size * 0.7);
+    aura.restore();
   }
 }
 
-function spawnGiant() {
+function squeeze() {
+  charge.squeezeStart = performance.now();
+  stage.style.transform = "";
+  setTimeout(fire, SQUEEZE_MS);
+}
+
+// Fire: the giant logo blasts out of the ball toward a corner, stretched
+// along its path, trailing a beam.
+function fire() {
+  const ballRadius = charge.radius * 0.6;
+  charge = null;
+  for (const rock of rocks) rock.falling = true;
   const element = createLogoElement();
-  const giantWidth = Math.min(innerWidth * 0.62, innerHeight * 1.1);
+  const giantWidth = Math.min(innerWidth * 0.5, innerHeight * 0.9);
   const giantHeight = giantWidth / 2;
   element.style.width = `${giantWidth}px`;
+  element.style.color = KI.core;
   const left = Math.random() < 0.5;
   const top = Math.random() < 0.5;
   giant = {
     element,
     svg: element.firstElementChild,
     width: giantWidth,
+    height: giantHeight,
     x0: (innerWidth - giantWidth) / 2,
     y0: (innerHeight - giantHeight) / 2,
     x1: left ? 0 : innerWidth - giantWidth,
     y1: top ? 0 : innerHeight - giantHeight,
     left,
     top,
-    travelled: 0,
-    hold: 0.8,
   };
-  giant.length = Math.hypot(giant.x1 - giant.x0, giant.y1 - giant.y0);
-  element.style.color = COLORS[0];
-  element.style.transform = `translate(${giant.x0}px, ${giant.y0}px)`;
-  if (!reduceMotion) {
-    giant.svg.animate(
-      [{ transform: "scale(0) rotate(-20deg)" }, { transform: "scale(1.35) rotate(6deg)" }, { transform: "scale(0.92)" }, { transform: "scale(1)" }],
-      { duration: 520, easing: "ease-out" }
-    );
-  }
-  mode = "giant";
+  giant.angle = Math.atan2(giant.y1 - giant.y0, giant.x1 - giant.x0);
+  blast = { start: performance.now(), width: ballRadius * 2, thinning: null };
+  mode = "fire";
+  playFireSound();
+  moveBlast(blast.start);
 }
 
-function moveGiant(seconds) {
-  if (giant.hold > 0) {
-    giant.hold -= seconds;
-    return;
-  }
-  const giantSpeed = speed * 0.5;
-  const secondsLeft = (giant.length - giant.travelled) / giantSpeed;
-  giant.travelled = Math.min(giant.length, giant.travelled + giantSpeed * seconds * brake(secondsLeft, 0.4));
-  const progress = giant.travelled / giant.length;
-  const x = giant.x0 + (giant.x1 - giant.x0) * progress;
-  const y = giant.y0 + (giant.y1 - giant.y0) * progress;
+function moveBlast(now) {
+  const progress = Math.min(1, (now - blast.start) / FIRE_MS);
+  const eased = progress * progress;
+  const x = giant.x0 + (giant.x1 - giant.x0) * eased;
+  const y = giant.y0 + (giant.y1 - giant.y0) * eased;
   giant.element.style.transform = `translate(${x}px, ${y}px)`;
-  if (progress === 1) giantHit();
+  if (!reduceMotion) giant.svg.style.transform = along(giant.angle, 1 + 0.8 * (1 - progress), 1 - 0.25 * (1 - progress));
+  giant.svg.style.transformOrigin = "50% 50%";
+  giant.tipX = x + giant.width / 2;
+  giant.tipY = y + giant.height / 2;
+  if (progress === 1) impact(now);
 }
 
-function giantHit() {
+function drawBeam(now) {
+  let width = blast.width;
+  if (blast.thinning !== null) {
+    const t = Math.min(1, (now - blast.thinning) / 180);
+    width *= 1 - t;
+    if (t === 1) {
+      blast = null;
+      return;
+    }
+  }
+  const fromX = innerWidth / 2;
+  const fromY = innerHeight / 2;
+  aura.lineCap = "round";
+  for (const [scale, color] of [[1.4, KI.aura], [1, KI.ring], [0.55, KI.core]]) {
+    aura.strokeStyle = color;
+    aura.lineWidth = width * scale;
+    aura.beginPath();
+    aura.moveTo(fromX, fromY);
+    aura.lineTo(giant.tipX, giant.tipY);
+    aura.stroke();
+  }
+}
+
+// Impact: hitstop on black and white impact frames, then the corner explodes.
+function impact(now) {
   mode = "landing";
-  const { element, svg, left, top } = giant;
+  giant.svg.style.transform = "";
   corners += 1;
   updateCount();
   navigator.vibrate?.([200, 60, 300]);
   playGiantSound();
-  flashScreen([...COLORS, ...COLORS, ...COLORS], 1600);
-  shakeStage(left ? -1 : 1, top ? -1 : 1, 48);
-  for (let i = 0; i < 3; i++) sprayConfetti(left, top, 120);
-  // Squash into the corner, then shrink down into a normal logo that keeps going.
-  const inAngle = Math.atan2(giant.y1 - giant.y0, giant.x1 - giant.x0);
+  blast.thinning = now;
+  if (!reduceMotion) impactStart = now;
+  setTimeout(startDome, IMPACT_FRAME_MS * IMPACT_FRAMES);
+}
+
+// Impact frames: the whole screen in two flat colors, swapping each frame.
+// The background, the giant and the starburst all switch on the same frame.
+function drawStarburst(now) {
+  const frame = Math.floor((now - impactStart) / IMPACT_FRAME_MS);
+  if (frame >= IMPACT_FRAMES) {
+    impactStart = null;
+    flash.style.opacity = "";
+    giant.element.style.color = KI.core;
+    return;
+  }
+  const ink = frame % 2 ? "#fff" : "#000";
+  flash.style.opacity = "1";
+  flash.style.background = frame % 2 ? "#000" : "#fff";
+  giant.element.style.color = ink;
+  const x = giant.left ? 0 : innerWidth;
+  const y = giant.top ? 0 : innerHeight;
+  const reach = Math.hypot(innerWidth, innerHeight);
+  burst.fillStyle = ink;
+  burst.beginPath();
+  for (let i = 0; i <= 24; i++) {
+    const angle = (i / 24) * Math.PI * 2;
+    const r = i % 2 ? reach * (0.15 + Math.random() * 0.15) : reach * (0.5 + Math.random() * 0.5);
+    if (i === 0) burst.moveTo(x + Math.cos(angle) * r, y + Math.sin(angle) * r);
+    else burst.lineTo(x + Math.cos(angle) * r, y + Math.sin(angle) * r);
+  }
+  burst.fill();
+}
+
+// The explosion: a dome that blows out fast from the corner, holds and
+// boils, then breaks into puffs that drift off and shrink away.
+function startDome() {
+  const x = giant.left ? 0 : innerWidth;
+  const y = giant.top ? 0 : innerHeight;
+  dome = { start: performance.now(), x, y, radius: Math.hypot(innerWidth, innerHeight) * 0.75, puffs: null, shrinking: false };
+  if (!reduceMotion) {
+    shakeStage(giant.left ? -1 : 1, giant.top ? -1 : 1, 50);
+    rings.push({ x, y, radius: 0, speed: 3000, width: 40, color: "#fff" });
+    rings.push({ x, y, radius: 0, speed: 2000, width: 20, color: KI.aura });
+    spray(x, y, Math.atan2(giant.top ? 1 : -1, giant.left ? 1 : -1), 1.6, 300);
+  }
+}
+
+function drawDome(now) {
+  const t = now - dome.start;
+  const { x, y, radius } = dome;
+  if (t < DOME_EXPAND_MS + DOME_HOLD_MS) {
+    const grow = 1 - (1 - Math.min(1, t / DOME_EXPAND_MS)) ** 4;
+    const boil = t > DOME_EXPAND_MS ? 1 + 0.03 * Math.sin(t / 30) : 1;
+    for (const [scale, color] of DOME_LAYERS) jaggedCircle(burst, x, y, radius * grow * scale * boil, 0.12, color, 40);
+    return;
+  }
+  if (!dome.puffs) {
+    // Break the dome into puffs of its own colors.
+    const inward = Math.atan2(y ? -1 : 1, x ? -1 : 1);
+    dome.puffs = Array.from({ length: 46 }, () => {
+      const distance = radius * Math.sqrt(Math.random());
+      const angle = inward + (Math.random() - 0.5) * Math.PI * 0.6;
+      const layer = DOME_LAYERS.findLast(([scale]) => distance <= radius * scale) ?? DOME_LAYERS[0];
+      return {
+        x: x + Math.cos(angle) * distance,
+        y: y + Math.sin(angle) * distance,
+        vx: Math.cos(angle) * (40 + Math.random() * 90),
+        vy: Math.sin(angle) * (40 + Math.random() * 90) - 30,
+        size: radius * (0.12 + Math.random() * 0.12),
+        color: layer[1],
+      };
+    }).sort((a, b) => DOME_LAYERS.findIndex((l) => l[1] === a.color) - DOME_LAYERS.findIndex((l) => l[1] === b.color));
+    shrinkGiant();
+  }
+  const fade = Math.min(1, (t - DOME_EXPAND_MS - DOME_HOLD_MS) / DOME_FADE_MS);
+  const elapsed = (t - DOME_EXPAND_MS - DOME_HOLD_MS) / 1000;
+  for (const puff of dome.puffs) {
+    burst.fillStyle = puff.color;
+    burst.beginPath();
+    burst.arc(puff.x + puff.vx * elapsed, puff.y + puff.vy * elapsed, puff.size * (1 - fade) ** 1.5, 0, Math.PI * 2);
+    burst.fill();
+  }
+  if (fade === 1) dome = null;
+}
+
+// Out of the smoke, the giant shrinks into a normal logo that keeps going.
+function shrinkGiant() {
+  const { element, svg, left, top } = giant;
   const normalScale = logoWidth / giant.width;
+  element.style.color = COLORS[1];
   svg.style.transformOrigin = `${left ? 0 : 100}% ${top ? 0 : 100}%`;
   svg.animate(
-    [
-      { transform: along(inAngle, 0.55, 1.3), color: "#000" },
-      { transform: along(inAngle, 0.7, 1.2), color: "#000", offset: 0.2 },
-      { transform: along(inAngle, 1.08, 0.95), color: COLORS[1], offset: 0.45 },
-      { transform: along(inAngle, normalScale, normalScale), color: COLORS[1] },
-    ],
-    { duration: reduceMotion ? 1 : 1100, easing: "ease-in-out", fill: "forwards" }
+    [{ transform: "scale(1)" }, { transform: `scale(${normalScale * 0.8})`, offset: 0.7 }, { transform: `scale(${normalScale})` }],
+    { duration: reduceMotion ? 1 : 700, easing: "ease-in", fill: "forwards" }
   ).finished.then(() => {
     element.remove();
     giant = null;
@@ -722,7 +852,8 @@ function tick(now) {
     for (const logo of logos) moveLogo(logo, seconds);
     if (jackpot && jackpot.logos.size === 0) jackpotFinale();
   }
-  if (mode === "giant") moveGiant(seconds);
+  if (mode === "fire") moveBlast(now);
+  renderAura(now, seconds);
   renderEffects(now, seconds);
   requestAnimationFrame(tick);
 }
@@ -830,36 +961,47 @@ function playJamSound() {
   playSound(sounds.jamStutter, { delay: 0.95, gain: 0.7, rate: 0.8 });
 }
 
-// A rising whine and a whoosh pitched up as everything gets sucked in.
-// It cuts out dead at the collapse, so the silent beat is truly silent.
-function playImplosionSound() {
+// A low rumble and a whine that climb while the ball charges, then cut out
+// dead at the squeeze, so the held moment is silent.
+function playChargeSound() {
   if (!sounds) return;
   const now = audio.currentTime;
-  const seconds = IMPLODE_MS / 1000;
+  const seconds = CHARGE_MS / 1000;
+  const rumble = audio.createOscillator();
+  const rumbleFilter = audio.createBiquadFilter();
+  const rumbleLevel = audio.createGain();
+  rumble.type = "sawtooth";
+  rumble.frequency.setValueAtTime(40, now);
+  rumble.frequency.exponentialRampToValueAtTime(140, now + seconds);
+  rumbleFilter.type = "lowpass";
+  rumbleFilter.frequency.value = 380;
+  rumbleLevel.gain.setValueAtTime(0.001, now);
+  rumbleLevel.gain.exponentialRampToValueAtTime(0.5, now + seconds);
+  rumble.connect(rumbleFilter).connect(rumbleLevel).connect(audio.destination);
   const whine = audio.createOscillator();
-  const level = audio.createGain();
-  whine.type = "sawtooth";
-  whine.frequency.setValueAtTime(70, now);
-  whine.frequency.exponentialRampToValueAtTime(1400, now + seconds);
-  level.gain.setValueAtTime(0.001, now);
-  level.gain.exponentialRampToValueAtTime(0.12, now + seconds);
-  whine.connect(level).connect(audio.destination);
-  whine.start(now);
-  whine.stop(now + seconds);
-  playSound(sounds.mergeWhoosh, { gain: 0.8, rate: 0.6, rateTo: 2.4, rampSeconds: seconds });
+  const whineLevel = audio.createGain();
+  whine.frequency.setValueAtTime(260, now);
+  whine.frequency.exponentialRampToValueAtTime(1300, now + seconds);
+  whineLevel.gain.setValueAtTime(0.001, now);
+  whineLevel.gain.exponentialRampToValueAtTime(0.06, now + seconds);
+  whine.connect(whineLevel).connect(audio.destination);
+  for (const oscillator of [rumble, whine]) {
+    oscillator.start(now);
+    oscillator.stop(now + seconds);
+  }
 }
 
-function playExplosionSound() {
+function playFireSound() {
   if (!sounds) return;
-  playThump(2.2);
-  playSound(sounds.giantImpact, { gain: 1 });
-  playSound(sounds.giantImpact, { delay: 0.03, gain: 0.7, rate: 0.7 });
+  playThump(1);
+  playSound(sounds.mergeWhoosh, { gain: 1, rate: 2.2 });
 }
 
 function playGiantSound() {
   if (!sounds) return;
-  playThump(2);
+  playThump(2.5);
   playSound(sounds.giantImpact, { gain: 1 });
+  playSound(sounds.giantImpact, { delay: 0.04, gain: 0.8, rate: 0.6 });
   playSound(sounds.giantHorn, { delay: 0.05, gain: 0.7 });
   sounds.cheers.forEach((cheer, i) => playSound(cheer, { delay: 0.1 + i * 0.08, gain: 0.6 }));
 }

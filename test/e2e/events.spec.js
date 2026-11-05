@@ -42,7 +42,7 @@ test("jackpot: every logo hits a corner in the same frame", async ({ page }) => 
   await expect(page.locator("#banner-text")).toHaveText("Jackpot");
 });
 
-test("too many logos: the player jams, everything implodes into a giant, it lands a corner, then resets", async ({ page }) => {
+test("too many logos: the player jams, a ki blast fires a giant logo into a corner, then it resets", async ({ page }) => {
   const errors = await openPage(page);
   for (let i = 0; i < 48; i++) await page.mouse.click(100 + ((i * 37) % 1000), 100 + ((i * 53) % 500));
   expect((await readState(page)).mode).toBe("play");
@@ -53,28 +53,30 @@ test("too many logos: the player jams, everything implodes into a giant, it land
   await expect(page.locator(".logo")).toHaveCount(50);
 
   await page.clock.runFor(1600);
-  expect((await readState(page)).mode).toBe("merge");
-  // Implosion: speed lines and debris get drawn while everything spirals in.
-  await page.clock.runFor(700);
-  expect(await page.evaluate(() => {
-    const canvas = document.getElementById("burst");
-    const pixels = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
-    for (let i = 3; i < pixels.length; i += 4) if (pixels[i]) return true;
-    return false;
-  })).toBe(true);
-  // Then the silent beat, the impact frames, and the giant bursts out.
-  await page.clock.runFor(1300);
-  expect((await readState(page)).mode).toBe("giant");
+  expect((await readState(page)).mode).toBe("charge");
+  // The logos stream into an energy ball drawn in the middle of the screen.
+  await page.clock.runFor(1700);
+  await expect(page.locator(".logo")).toHaveCount(0);
+  const ballPixel = await page.evaluate(() => {
+    const canvas = document.getElementById("aura");
+    const scale = canvas.width / innerWidth;
+    return [...canvas.getContext("2d").getImageData((innerWidth / 2) * scale, (innerHeight / 2) * scale, 1, 1).data];
+  });
+  expect(ballPixel).toEqual([255, 255, 255, 255]); // white-hot core
+
+  // Squeeze, then fire: the giant logo blasts out and lands in a corner.
+  const { corners } = await readState(page);
+  await sampleUntil(page, (s) => s.mode === "fire", { maxMs: 1000 });
   await expect(page.locator(".logo")).toHaveCount(1);
   const giantWidth = await page.locator(".logo").evaluate((element) => element.getBoundingClientRect().width);
   expect(giantWidth).toBeGreaterThan(500);
-
-  const { corners } = await readState(page);
-  await sampleUntil(page, (s) => s.mode === "landing", { maxMs: 10_000 });
+  await sampleUntil(page, (s) => s.mode === "landing", { maxMs: 1000 });
   expect((await readState(page)).corners).toBe(corners + 1);
 
-  // The giant shrinks back down into a normal logo, starting from that corner.
-  // CSS animations run on real time, not the test's fake clock.
+  // The explosion runs its course, and the giant shrinks back into a normal
+  // logo in that corner. Its shrink is a CSS animation, which runs on real
+  // time rather than the test's fake clock.
+  await page.clock.runFor(1000);
   await expect.poll(async () => (await readState(page)).mode, { timeout: 5000 }).toBe("play");
   const reset = await readState(page);
   await expect(page.locator(".logo")).toHaveCount(1);
