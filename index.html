@@ -98,7 +98,6 @@ import { fold, planCornerRun } from "./path.js";
 
 const COLORS = ["#ff4fd8", "#ff8a1f", "#ffe600", "#00e5ff", "#39ff6a", "#ff2b2b", "#ffffff"];
 const CHEERS = ["kids", "wow", "applause", "child-wow", "ooh"].map((name) => `sounds/cheer-${name}.mp3`);
-const CORNER_FREEZE_MS = 380;
 const SLOWMO_WINDOW_SECONDS = 0.55;
 const SLOWMO_FLOOR = 0.28;
 const MAX_FRAME_SECONDS = 0.05;
@@ -139,7 +138,7 @@ function measure() {
 function addLogo(x, y) {
   const element = logoTemplate.content.firstElementChild.cloneNode(true);
   stage.append(element);
-  const logo = { element, svg: element.firstElementChild, x, y, colorIndex: randomColorIndex(-1), frozenUntil: 0 };
+  const logo = { element, svg: element.firstElementChild, x, y, colorIndex: randomColorIndex(-1) };
   element.style.color = COLORS[logo.colorIndex];
   logos.push(logo);
   return logo;
@@ -161,7 +160,7 @@ function draw(logo) {
 }
 
 // The payoff. Everything here happens in the same instant so it lands as one hit.
-function hitCorner(logo, now) {
+function hitCorner(logo) {
   recolor(logo);
   const color = COLORS[logo.colorIndex];
   const left = fold(logo.x, width) < width / 2;
@@ -171,7 +170,6 @@ function hitCorner(logo, now) {
 
   corners += 1;
   countLabel.textContent = corners === 1 ? "1 corner" : `${corners} corners`;
-  logo.frozenUntil = now + CORNER_FREEZE_MS;
   navigator.vibrate?.(35);
   if (soundOn) playCorner();
   if (reduceMotion) return;
@@ -184,7 +182,7 @@ function hitCorner(logo, now) {
       { transform: "scale(1.06, 0.96)", color, offset: 0.55 },
       { transform: "scale(1)", color },
     ],
-    { duration: CORNER_FREEZE_MS + 260, easing: "ease-out" }
+    { duration: 640, easing: "ease-out" }
   );
   flash.style.background = color;
   flash.animate(
@@ -245,8 +243,7 @@ function updateConfetti(seconds) {
   }
 }
 
-function moveLogo(logo, now, seconds) {
-  if (now < logo.frozenUntil) return;
+function moveLogo(logo, seconds) {
   // Slow down for the last moment before the corner, so everyone gets to lean in.
   const secondsLeft = (logo.run.length - logo.travelled) / speed;
   const slowmo = secondsLeft < SLOWMO_WINDOW_SECONDS
@@ -262,7 +259,7 @@ function moveLogo(logo, now, seconds) {
   logo.y = logo.run.y0 + (logo.run.y1 - logo.run.y0) * progress;
   draw(logo);
   if (progress === 1) {
-    hitCorner(logo, now);
+    hitCorner(logo);
     startRun(logo);
   }
 }
@@ -270,7 +267,7 @@ function moveLogo(logo, now, seconds) {
 function tick(now) {
   const seconds = Math.min((now - lastTime) / 1000, MAX_FRAME_SECONDS);
   lastTime = now;
-  for (const logo of logos) moveLogo(logo, now, seconds);
+  for (const logo of logos) moveLogo(logo, seconds);
   if (particles.length) updateConfetti(seconds);
   requestAnimationFrame(tick);
 }
