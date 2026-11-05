@@ -6,8 +6,6 @@ https://joekarlsson.github.io/nothing-but-corners/
 
 - Click anywhere to add another logo.
 - `S` or the speaker icon for sound, `F` or the corners icon for full screen.
-- Once in a while every logo on screen hits a corner at the same moment.
-- Add way too many logos and see what happens.
 
 ## How it always hits
 
