@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Corner Hit</title>
+<meta name="description" content="An idle DVD player logo that only ever hits the corner.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&display=block" rel="stylesheet">
+<style>
+  :root {
+    --screen: #000;
+    --osd: #d8d8d8;
+  }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--screen);
+    color: var(--osd);
+    font: 15px/1.2 Helvetica, Arial, sans-serif;
+  }
+  body.idle { cursor: none; }
+  #logo {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: clamp(140px, 20vw, 300px);
+    aspect-ratio: 2 / 1;
+    color: #ff4fd8;
+    will-change: transform;
+  }
+  #logo svg { display: block; width: 100%; height: 100%; }
+  #flash {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+  }
+  #osd {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    bottom: 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    transition: visibility 0s 0.4s;
+  }
+  body.idle #osd button { visibility: hidden; }
+  #osd button {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    padding: 4px 0;
+    cursor: pointer;
+  }
+  #osd button:focus-visible { outline: 2px solid var(--osd); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div id="flash"></div>
+<div id="logo" aria-label="DVD Video logo" role="img">
+  <svg viewBox="0 0 200 100" fill="currentColor">
+    <defs>
+      <mask id="disc-cutout">
+        <rect width="200" height="100" fill="#fff"/>
+        <text x="100" y="86.5" text-anchor="middle" font-family="Helvetica, Arial, sans-serif"
+              font-weight="700" font-size="15" letter-spacing="5" fill="#000">VIDEO</text>
+      </mask>
+    </defs>
+    <g transform="translate(15 0) skewX(-15)">
+      <text x="100" y="62" text-anchor="middle" font-family="'Archivo Black', 'Arial Black', sans-serif"
+            font-size="66" textLength="176" lengthAdjust="spacingAndGlyphs">DVD</text>
+    </g>
+    <ellipse cx="100" cy="81" rx="94" ry="15" mask="url(#disc-cutout)"/>
+  </svg>
+</div>
+<div id="osd">
+  <span id="count" aria-live="polite">0 corners</span>
+  <button id="sound" type="button">Sound off</button>
+</div>
+
+<script type="module">
+import { fold, planCornerRun } from "./path.js";
+
+const COLORS = ["#ff4fd8", "#ff8a1f", "#ffe600", "#00e5ff", "#39ff6a", "#ff2b2b", "#ffffff"];
+const CORNER_FREEZE_MS = 420;
+const MAX_FRAME_SECONDS = 0.05;
+
+const logo = document.getElementById("logo");
+const flash = document.getElementById("flash");
+const countLabel = document.getElementById("count");
+const soundButton = document.getElementById("sound");
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+let width, height, speed;
+let unfoldedX = 0, unfoldedY = 0;
+let run, distanceTravelled, nextBounce;
+let colorIndex = 0;
+let corners = 0;
+let frozenUntil = 0;
+let lastTime = performance.now();
+
+function measure() {
+  const box = logo.getBoundingClientRect();
+  width = Math.max(1, innerWidth - box.width);
+  height = Math.max(1, innerHeight - box.height);
+  speed = 0.14 * Math.hypot(innerWidth, innerHeight);
+}
+
+function startRun() {
+  run = planCornerRun(unfoldedX, unfoldedY, width, height);
+  distanceTravelled = 0;
+  nextBounce = 0;
+}
+
+function changeColor() {
+  let next;
+  do next = Math.floor(Math.random() * COLORS.length); while (next === colorIndex);
+  colorIndex = next;
+  logo.style.color = COLORS[colorIndex];
+}
+
+function draw() {
+  logo.style.transform = `translate(${fold(unfoldedX, width)}px, ${fold(unfoldedY, height)}px)`;
+}
+
+function hitCorner(now) {
+  changeColor();
+  corners += 1;
+  countLabel.textContent = corners === 1 ? "1 corner" : `${corners} corners`;
+  frozenUntil = now + CORNER_FREEZE_MS;
+  if (!reduceMotion) {
+    flash.style.background = COLORS[colorIndex];
+    flash.animate([{ opacity: 0.6 }, { opacity: 0 }], { duration: 700, easing: "ease-out" });
+    logo.firstElementChild.animate(
+      [{ transform: "scale(1.18)" }, { transform: "scale(0.94)" }, { transform: "scale(1)" }],
+      { duration: CORNER_FREEZE_MS + 200, easing: "ease-out" }
+    );
+  }
+  if (soundOn) playCheer();
+}
+
+function tick(now) {
+  const seconds = Math.min((now - lastTime) / 1000, MAX_FRAME_SECONDS);
+  lastTime = now;
+  if (now >= frozenUntil) {
+    distanceTravelled += speed * seconds;
+    const progress = Math.min(distanceTravelled / run.length, 1);
+    while (nextBounce < run.bounces.length && run.bounces[nextBounce] <= progress) {
+      nextBounce += 1;
+      changeColor();
+    }
+    unfoldedX = run.x0 + (run.x1 - run.x0) * progress;
+    unfoldedY = run.y0 + (run.y1 - run.y0) * progress;
+    draw();
+    if (progress === 1) {
+      hitCorner(now);
+      startRun();
+    }
+  }
+  requestAnimationFrame(tick);
+}
+
+addEventListener("resize", () => {
+  const x = fold(unfoldedX, width);
+  const y = fold(unfoldedY, height);
+  measure();
+  unfoldedX = Math.min(x, width);
+  unfoldedY = Math.min(y, height);
+  startRun();
+  draw();
+});
+
+// Sound: a bright "ding" and a burst of synthesized applause, for the
+// moment everyone in the room was waiting for.
+let soundOn = false;
+let audio;
+
+soundButton.addEventListener("click", () => {
+  soundOn = !soundOn;
+  soundButton.textContent = soundOn ? "Sound on" : "Sound off";
+  if (soundOn) {
+    audio ??= new AudioContext();
+    audio.resume();
+  }
+});
+addEventListener("keydown", (event) => {
+  if (event.key === "s" || event.key === "S") soundButton.click();
+});
+
+function playCheer() {
+  const now = audio.currentTime;
+  const out = audio.createGain();
+  out.gain.value = 0.5;
+  out.connect(audio.destination);
+
+  [880, 1320, 1760].forEach((frequency, i) => {
+    const tone = audio.createOscillator();
+    const gain = audio.createGain();
+    tone.type = "triangle";
+    tone.frequency.value = frequency;
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.25 / (i + 1), now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.2);
+    tone.connect(gain).connect(out);
+    tone.start(now);
+    tone.stop(now + 1.3);
+  });
+
+  const seconds = 2.4;
+  const rate = audio.sampleRate;
+  const buffer = audio.createBuffer(1, Math.floor(rate * seconds), rate);
+  const samples = buffer.getChannelData(0);
+  for (let clap = 0; clap < 700; clap++) {
+    const start = Math.random() * seconds * 0.9;
+    const swell = Math.min(1, start / 0.12) * Math.exp(-start / 0.9);
+    const length = Math.floor(rate * (0.008 + Math.random() * 0.02));
+    const amplitude = swell * (0.3 + Math.random() * 0.7);
+    const offset = Math.floor(start * rate);
+    for (let i = 0; i < length && offset + i < samples.length; i++) {
+      samples[offset + i] += (Math.random() * 2 - 1) * amplitude * Math.exp(-i / (length * 0.25));
+    }
+  }
+  const applause = audio.createBufferSource();
+  applause.buffer = buffer;
+  const band = audio.createBiquadFilter();
+  band.type = "bandpass";
+  band.frequency.value = 1800;
+  band.Q.value = 0.6;
+  const level = audio.createGain();
+  level.gain.value = 0.18;
+  applause.connect(band).connect(level).connect(out);
+  applause.start(now + 0.05);
+}
+
+// Hide the cursor and button after a few still seconds, like a screensaver.
+let idleTimer;
+function wake() {
+  document.body.classList.remove("idle");
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => document.body.classList.add("idle"), 2500);
+}
+addEventListener("pointermove", wake);
+addEventListener("keydown", wake);
+wake();
+
+document.fonts.ready.then(() => {
+  measure();
+  startRun();
+  draw();
+  lastTime = performance.now();
+  requestAnimationFrame(tick);
+});
+</script>
+</body>
+</html>
