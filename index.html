@@ -97,11 +97,11 @@
 import { fold, planCornerRun } from "./path.js";
 
 const COLORS = ["#ff4fd8", "#ff8a1f", "#ffe600", "#00e5ff", "#39ff6a", "#ff2b2b", "#ffffff"];
-const CHEERS = ["kids", "wow", "applause", "child-wow", "ooh"].map((name) => `sounds/cheer-${name}.mp3`);
+const CHEERS = ["kids", "kids-yay", "applause", "yay"].map((name) => `sounds/cheer-${name}.mp3`);
 // Cartoon timing: hold full speed, brake late and hard into the corner
 // (slow in), then snap out fast and settle back to cruising speed.
-const SLOWMO_WINDOW_SECONDS = 0.25;
-const SLOWMO_FLOOR = 0.16;
+const SLOWMO_WINDOW_SECONDS = 0.12;
+const SLOWMO_FLOOR = 0.18;
 const RICOCHET_BOOST = 1.9;
 const RICOCHET_SETTLE_SECONDS = 0.22;
 const MAX_FRAME_SECONDS = 0.05;

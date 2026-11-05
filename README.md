@@ -12,4 +12,4 @@ Mirror the screen across its walls and a bouncing path becomes a straight line. 
 
 ## Sounds
 
-Cheers in `sounds/` are short cuts from Joe's sound effects library, including Freesound #521900 by mrfossy and #264499 by noah0189.
+Cheers in `sounds/` are short cuts from Joe's sound effects library, including Freesound #563845 by disarmenemyships.

@@ -46,16 +46,42 @@ export function wallCrossingFractions(u0, u1, length) {
   return fractions;
 }
 
+// How close a run comes to a corner at its wall bounces, as a fraction of
+// the play area (0 = in a corner, 0.5 = mid-wall).
+function nearestCornerApproach(run, width, height) {
+  let nearest = Infinity;
+  for (const f of run.bounces) {
+    const x = fold(run.x0 + (run.x1 - run.x0) * f, width);
+    const y = fold(run.y0 + (run.y1 - run.y0) * f, height);
+    const fromCornerX = Math.min(x, width - x) / width;
+    const fromCornerY = Math.min(y, height - y) / height;
+    nearest = Math.min(nearest, Math.max(fromCornerX, fromCornerY));
+  }
+  return nearest;
+}
+
+// No teases: a wall bounce may not land this close to a corner.
+export const NEAR_MISS_MARGIN = 0.25;
+const PLAN_ATTEMPTS = 60;
+
 // Plan the next run from unfolded point (x, y) to a corner. From a
-// non-corner start (after a resize) it heads for the nearest lattice
-// base plus the step, which still ends in a corner.
+// non-corner start (a clicked-in logo, a resize) it heads for the nearest
+// lattice base plus the step, which still ends in a corner. Runs whose
+// bounces skim a corner are thrown out; from a corner, none ever do.
 export function planCornerRun(x, y, width, height, random = Math.random) {
-  const step = pickCornerStep(random);
-  const x1 = (Math.round(x / width) + step.m) * width;
-  const y1 = (Math.round(y / height) + step.n) * height;
-  const bounces = [
-    ...wallCrossingFractions(x, x1, width),
-    ...wallCrossingFractions(y, y1, height),
-  ].sort((a, b) => a - b);
-  return { x0: x, y0: y, x1, y1, length: Math.hypot(x1 - x, y1 - y), bounces };
+  let best;
+  for (let attempt = 0; attempt < PLAN_ATTEMPTS; attempt++) {
+    const step = pickCornerStep(random);
+    const x1 = (Math.round(x / width) + step.m) * width;
+    const y1 = (Math.round(y / height) + step.n) * height;
+    const bounces = [
+      ...wallCrossingFractions(x, x1, width),
+      ...wallCrossingFractions(y, y1, height),
+    ].sort((a, b) => a - b);
+    const run = { x0: x, y0: y, x1, y1, length: Math.hypot(x1 - x, y1 - y), bounces };
+    run.nearestApproach = nearestCornerApproach(run, width, height);
+    if (run.nearestApproach >= NEAR_MISS_MARGIN) return run;
+    if (!best || run.nearestApproach > best.nearestApproach) best = run;
+  }
+  return best;
 }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fold, planCornerRun } from "./path.js";
+import { fold, planCornerRun, NEAR_MISS_MARGIN } from "./path.js";
 
 const W = 800;
 const H = 450;
@@ -31,4 +31,11 @@ test("every run ends in a corner and never touches one on the way", () => {
 test("a run from mid-screen (after a resize) still ends in a corner", () => {
   const plan = planCornerRun(313, 97, W, H);
   assert.ok(isCorner(fold(plan.x1, W), fold(plan.y1, H)));
+});
+
+test("no near misses: bounces stay clear of corners, even from a clicked-in start", () => {
+  for (let i = 0; i < 2000; i++) {
+    const plan = planCornerRun(Math.random() * W, Math.random() * H, W, H);
+    assert.ok(plan.nearestApproach >= NEAR_MISS_MARGIN, `approach ${plan.nearestApproach}`);
+  }
 });
