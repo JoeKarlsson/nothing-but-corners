@@ -157,7 +157,10 @@ const CHARGE_MS = 2000; // logos stream into the ball, then it crackles at full 
 const STREAM_MS = 1400; // when the last logo has been absorbed
 const SQUEEZE_MS = 260; // anticipation: the ball shrinks back, everything freezes, silence
 const FIRE_MS = 170; // the giant logo blasts across the screen
-const RICOCHET_MS = 420; // off the first corner, across to the opposite one
+const BOUNCE_MS = 420; // each bounce between the four corners
+const TO_MIDDLE_MS = 520; // off the fourth corner, braking to a dead stop in the middle
+const WINDUP_MS = 900; // stopped in the middle, winding up
+const CRAWL_MS = 1900; // then slowly into one last corner
 const IMPACT_FRAME_MS = 50; // each flat two-color impact frame
 const DOME_EXPAND_MS = 520;
 const DOME_HOLD_MS = 450;
@@ -166,8 +169,15 @@ const SHATTER_HOLD_MS = 450; // the second corner: shards strobe in place
 const SHATTER_FLY_MS = 1100; // then fly apart and fall away
 // Impact frames as [background, ink] pairs: black and white for the first
 // corner, loud colors for the second.
-const FIRST_IMPACT = [["#fff", "#000"], ["#000", "#fff"], ["#fff", "#000"]];
-const SECOND_IMPACT = [["#ff4fd8", "#000"], ["#000", "#ffe600"], ["#ffe600", "#000"], ["#000", "#ff4fd8"]];
+// Each of the four bounce corners gets its own pair; the final corner gets
+// the loudest set.
+const BOUNCE_IMPACTS = [
+  [["#fff", "#000"], ["#000", "#fff"], ["#fff", "#000"]],
+  [["#ff4fd8", "#000"], ["#000", "#ff4fd8"], ["#ff4fd8", "#000"]],
+  [["#ffe600", "#000"], ["#000", "#ffe600"], ["#ffe600", "#000"]],
+  [["#00e5ff", "#000"], ["#000", "#00e5ff"], ["#00e5ff", "#000"]],
+];
+const FINAL_IMPACT = [["#ff4fd8", "#000"], ["#000", "#ffe600"], ["#ffe600", "#000"], ["#000", "#ff4fd8"], ["#fff", "#000"]];
 const SHARD_COLORS = ["#ff4fd8", "#ffffff", "#ffe600", "#00e5ff", "#ff8a1f", "#000000"];
 const KI = { aura: "#ff4fd8", ring: "#ffe600", core: "#ffffff" };
 const DOME_LAYERS = [[1, "#ff2b2b"], [0.84, "#ff8a1f"], [0.68, "#ff4fd8"], [0.5, "#ffe600"], [0.32, "#ffffff"]];
@@ -200,10 +210,13 @@ const domes = []; // the first corner's explosion and its chain explosions
 let shatter = null; // the second corner's explosion
 let effectsOnCanvas = false;
 let auraOnCanvas = false;
-let mode = "play"; // play, jam, charge, fire, ricochet, landing
+let mode = "play"; // play, jam, charge, fire, bounce, windup, crawl, landing
 let jackpot = null;
 let giant = null;
 
+// Milliseconds since an effect started. Effects that start partway through a
+// frame record a start a hair after that frame's timestamp, so never negative.
+const since = (start, now) => Math.max(0, now - start);
 const brake = (secondsLeft, window = SLOWMO_WINDOW_SECONDS) => brakeCurve(secondsLeft, window, SLOWMO_FLOOR);
 const randomColorIndex = (except) => pickDifferent(COLORS.length, except);
 
@@ -587,8 +600,8 @@ function drawCharge(now) {
   let radius;
   if (charge.squeezeStart === null) {
     charge.radius += (charge.target - charge.radius) * 0.2;
-    const pulse = Math.max(0, 1 - (now - charge.pulse) / 140);
-    radius = charge.radius * (1 + 0.22 * pulse + 0.04 * Math.sin((now - charge.start) / 35));
+    const pulse = Math.max(0, 1 - since(charge.pulse, now) / 140);
+    radius = charge.radius * (1 + 0.22 * pulse + 0.04 * Math.sin(since(charge.start, now) / 35));
     const power = charge.radius / (Math.min(innerWidth, innerHeight) * 0.15);
     if (!reduceMotion) {
       const shake = 1 + 10 * power * power;
@@ -599,7 +612,7 @@ function drawCharge(now) {
     charge.auraRoughness = 0.35;
   } else {
     // Squeeze: shrink back fast and hold still. Nothing moves, nothing sounds.
-    const s = Math.min(1, (now - charge.squeezeStart) / SQUEEZE_MS);
+    const s = Math.min(1, since(charge.squeezeStart, now) / SQUEEZE_MS);
     radius = charge.radius * (1 - 0.4 * (1 - (1 - s) ** 3));
     charge.auraRoughness = 0.12;
   }
@@ -688,51 +701,143 @@ function fire() {
   const giantHeight = giantWidth / 2;
   element.style.width = `${giantWidth}px`;
   element.style.color = KI.core;
-  const left = Math.random() < 0.5;
-  const top = Math.random() < 0.5;
-  giant = { element, svg: element.firstElementChild, width: giantWidth, height: giantHeight, left, top };
-  setGiantPath((innerWidth - giantWidth) / 2, (innerHeight - giantHeight) / 2, left, top);
+  giant = { element, svg: element.firstElementChild, width: giantWidth, height: giantHeight, hits: 0 };
+  const middle = giantMiddle();
+  giant.x = middle.x;
+  giant.y = middle.y;
   blast = { start: performance.now(), width: ballRadius * 2, thinning: null };
   mode = "fire";
   playFireSound();
-  moveGiant(blast.start);
+  const left = Math.random() < 0.5;
+  const top = Math.random() < 0.5;
+  // The tour: fire into one corner, then the opposite one, then swing over
+  // to a neighbor, then its opposite. All four, in a bowtie.
+  giant.tour = [[left, top], [!left, !top], [!left, top], [left, !top]];
+  sendGiant(giantCorner(left, top), FIRE_MS, (p) => p * p, () => bounceCorner(0));
 }
 
-function setGiantPath(fromX, fromY, left, top) {
-  Object.assign(giant, {
-    x0: fromX,
-    y0: fromY,
-    x1: left ? 0 : innerWidth - giant.width,
-    y1: top ? 0 : innerHeight - giant.height,
-    left,
-    top,
-    start: performance.now(),
-    moving: true,
-  });
-  giant.angle = Math.atan2(giant.y1 - giant.y0, giant.x1 - giant.x0);
+const giantMiddle = () => ({ x: (innerWidth - giant.width) / 2, y: (innerHeight - giant.height) / 2 });
+const giantCorner = (left, top) => ({ x: left ? 0 : innerWidth - giant.width, y: top ? 0 : innerHeight - giant.height, left, top });
+
+// Move the giant along one leg. Legs between neighboring corners curve
+// through the middle of the screen (an arc) instead of sliding along a wall.
+function sendGiant(to, duration, ease, onArrive, curve = false) {
+  const from = { x: giant.x, y: giant.y };
+  const middle = giantMiddle();
+  const halfway = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+  const control = curve
+    ? { x: halfway.x + (middle.x - halfway.x) * 1.2, y: halfway.y + (middle.y - halfway.y) * 1.2 }
+    : halfway;
+  giant.leg = { from, to, control, start: performance.now(), duration, ease, onArrive };
 }
 
-// Fire accelerates into the first corner. The ricochet launches fast off it
-// and brakes into the second, the same slow-in as every other corner.
 function moveGiant(now) {
-  const duration = mode === "fire" ? FIRE_MS : RICOCHET_MS;
-  const progress = Math.min(1, (now - giant.start) / duration);
-  const eased = mode === "fire" ? progress * progress : 1 - (1 - progress) ** 2.2;
-  const speed = mode === "fire" ? progress : (1 - progress) ** 1.2; // for the smear
-  const x = giant.x0 + (giant.x1 - giant.x0) * eased;
-  const y = giant.y0 + (giant.y1 - giant.y0) * eased;
+  const { from, to, control, start, duration, ease, onArrive } = giant.leg;
+  const progress = Math.min(1, since(start, now) / duration);
+  const e = ease(progress);
+  const x = (1 - e) ** 2 * from.x + 2 * (1 - e) * e * control.x + e * e * to.x;
+  const y = (1 - e) ** 2 * from.y + 2 * (1 - e) * e * control.y + e * e * to.y;
+  // Stretch along the direction of travel, more the faster it goes.
+  const step = Math.hypot(x - giant.x, y - giant.y);
+  const smear = reduceMotion ? 0 : Math.min(1, step / 45);
+  if (step > 0.01) giant.angle = Math.atan2(y - giant.y, x - giant.x);
+  giant.x = x;
+  giant.y = y;
   giant.element.style.transform = `translate(${x}px, ${y}px)`;
   giant.svg.style.transformOrigin = "50% 50%";
-  if (!reduceMotion) giant.svg.style.transform = along(giant.angle, 1 + 0.8 * speed, 1 - 0.25 * speed);
+  giant.svg.style.transform = along(giant.angle ?? 0, 1 + 0.8 * smear, 1 - 0.25 * smear);
   giant.tipX = x + giant.width / 2;
   giant.tipY = y + giant.height / 2;
-  if (progress === 1) (mode === "fire" ? firstCorner : secondCorner)(now);
+  if (progress === 1) {
+    giant.leg = null;
+    giant.svg.style.transform = "";
+    onArrive(now);
+  }
+}
+
+function countGiantCorner() {
+  giant.hits += 1;
+  corners += 1;
+  updateCount();
+}
+
+// Bounce corners: impact frames in that corner's colors, a dome explosion,
+// and the giant launches straight on toward the next corner of the tour.
+function bounceCorner(index) {
+  mode = "bounce";
+  const now = performance.now();
+  const [left, top] = giant.tour[index];
+  countGiantCorner();
+  domes.length = 0; // each hit blows the last explosion away
+  navigator.vibrate?.([150, 40, 150]);
+  playBounceCornerSound();
+  if (blast) blast.thinning ??= now;
+  const cornerX = left ? 0 : innerWidth;
+  const cornerY = top ? 0 : innerHeight;
+  const frames = BOUNCE_IMPACTS[index];
+  if (!reduceMotion) impactFlash = { start: now, x: cornerX, y: cornerY, frames };
+  setTimeout(() => {
+    startDomes(cornerX, cornerY);
+    if (index < giant.tour.length - 1) {
+      const [nextLeft, nextTop] = giant.tour[index + 1];
+      const neighbor = nextLeft === left || nextTop === top;
+      sendGiant(giantCorner(nextLeft, nextTop), BOUNCE_MS, (p) => 1 - (1 - p) ** 1.6, () => bounceCorner(index + 1), neighbor);
+    } else {
+      // Off the last corner, back to the middle, braking to a dead stop.
+      sendGiant(giantMiddle(), TO_MIDDLE_MS, (p) => 1 - (1 - p) ** 3, windUp);
+    }
+  }, IMPACT_FRAME_MS * frames.length);
+}
+
+// Stopped dead in the middle: squash down and tremble while the sound builds
+// (anticipation), then crawl slowly into one last corner.
+function windUp() {
+  mode = "windup";
+  playWindUpSound();
+  if (!reduceMotion) {
+    const shake = Array.from({ length: 18 }, (_, i) => {
+      const t = i / 17;
+      const jitter = 2 + 10 * t;
+      return {
+        offset: t,
+        transform: `translate(${(Math.random() - 0.5) * jitter}px, ${(Math.random() - 0.5) * jitter}px) scale(${1 - 0.18 * t}, ${1 - 0.1 * t})`,
+      };
+    });
+    shake[shake.length - 1].transform = "translate(0, 0) scale(0.82, 0.9)";
+    giant.svg.style.transformOrigin = "50% 50%";
+    giant.svg.animate(shake, { duration: WINDUP_MS, fill: "forwards" });
+  }
+  setTimeout(() => {
+    mode = "crawl";
+    giant.svg.getAnimations().forEach((animation) => animation.cancel());
+    const left = Math.random() < 0.5;
+    const top = Math.random() < 0.5;
+    // Slow start, slow finish: it eases out of the middle and brakes in.
+    const ease = (p) => (p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2);
+    sendGiant(giantCorner(left, top), CRAWL_MS, ease, () => finalCorner(left, top));
+  }, WINDUP_MS);
+}
+
+// The last corner: the loudest impact frames, then the shatter.
+function finalCorner(left, top) {
+  mode = "landing";
+  const now = performance.now();
+  giant.left = left;
+  giant.top = top;
+  countGiantCorner();
+  domes.length = 0;
+  navigator.vibrate?.([300, 60, 400]);
+  playGiantSound();
+  const cornerX = left ? 0 : innerWidth;
+  const cornerY = top ? 0 : innerHeight;
+  if (!reduceMotion) impactFlash = { start: now, x: cornerX, y: cornerY, frames: FINAL_IMPACT };
+  setTimeout(() => startShatter(cornerX, cornerY), IMPACT_FRAME_MS * FINAL_IMPACT.length);
 }
 
 function drawBeam(now) {
   let width = blast.width;
   if (blast.thinning !== null) {
-    const t = Math.min(1, (now - blast.thinning) / 180);
+    const t = Math.min(1, since(blast.thinning, now) / 180);
     width *= 1 - t;
     if (t === 1) {
       blast = null;
@@ -752,49 +857,11 @@ function drawBeam(now) {
   }
 }
 
-function countGiantCorner() {
-  giant.moving = false;
-  corners += 1;
-  updateCount();
-  giant.svg.style.transform = "";
-}
-
-// First corner: black and white impact frames, then a dome explosion big
-// enough to swallow the screen, with chain explosions down the edges. The
-// giant rides the blast straight back out toward the opposite corner.
-function firstCorner(now) {
-  mode = "ricochet";
-  countGiantCorner();
-  navigator.vibrate?.([200, 60, 200]);
-  playFirstCornerSound();
-  blast.thinning = now;
-  const cornerX = giant.left ? 0 : innerWidth;
-  const cornerY = giant.top ? 0 : innerHeight;
-  if (!reduceMotion) impactFlash = { start: now, x: cornerX, y: cornerY, frames: FIRST_IMPACT };
-  setTimeout(() => {
-    startDomes(cornerX, cornerY);
-    setGiantPath(giant.x1, giant.y1, !giant.left, !giant.top);
-  }, IMPACT_FRAME_MS * FIRST_IMPACT.length);
-}
-
-// Second corner: loud colored impact frames, then the shatter.
-function secondCorner(now) {
-  mode = "landing";
-  countGiantCorner();
-  domes.length = 0; // the second hit blows the first explosion away
-  navigator.vibrate?.([300, 60, 400]);
-  playGiantSound();
-  const cornerX = giant.left ? 0 : innerWidth;
-  const cornerY = giant.top ? 0 : innerHeight;
-  if (!reduceMotion) impactFlash = { start: now, x: cornerX, y: cornerY, frames: SECOND_IMPACT };
-  setTimeout(() => startShatter(cornerX, cornerY), IMPACT_FRAME_MS * SECOND_IMPACT.length);
-}
-
 // Impact frames: the whole screen in two flat colors, swapping each frame.
 // The background, the giant and the starburst all switch on the same frame.
 function drawImpactFlash(now) {
   const { start, x, y, frames } = impactFlash;
-  const frame = Math.floor((now - start) / IMPACT_FRAME_MS);
+  const frame = Math.floor(since(start, now) / IMPACT_FRAME_MS);
   if (frame >= frames.length) {
     impactFlash = null;
     flash.style.opacity = "";
@@ -817,10 +884,11 @@ function drawImpactFlash(now) {
   burst.fill();
 }
 
-// The first explosion: one dome bigger than the screen, then three more
+// A bounce explosion: one dome bigger than the screen, then three more
 // popping off along the edges a beat apart.
 function startDomes(x, y) {
   const reach = Math.hypot(innerWidth, innerHeight);
+  const hit = giant.hits;
   domes.push({ start: performance.now(), x, y, radius: reach * 1.15, puffs: null });
   if (reduceMotion) return;
   shakeStage(x ? 1 : -1, y ? 1 : -1, 70);
@@ -829,7 +897,7 @@ function startDomes(x, y) {
   rings.push({ x, y, radius: 0, speed: 1600, width: 16, color: KI.ring });
   spray(x, y, Math.atan2(y ? -1 : 1, x ? -1 : 1), 1.6, 320);
   [160, 300, 440].forEach((delay, i) => setTimeout(() => {
-    if (mode !== "ricochet") return; // the second corner already hit
+    if (giant?.hits !== hit) return; // the next corner already hit
     // Chain explosions along the two walls that meet at this corner.
     const alongTop = i % 2 === 0;
     const reachAlong = 0.3 + 0.25 * i;
@@ -844,7 +912,7 @@ function startDomes(x, y) {
 // A dome blows out fast, holds and boils, then breaks into puffs of its own
 // colors that drift off and shrink away.
 function drawDome(dome, now) {
-  const t = now - dome.start;
+  const t = since(dome.start, now);
   const { x, y, radius } = dome;
   if (t < DOME_EXPAND_MS + DOME_HOLD_MS) {
     const grow = 1 - (1 - Math.min(1, t / DOME_EXPAND_MS)) ** 4;
@@ -908,7 +976,7 @@ function startShatter(x, y) {
 }
 
 function drawShatter(now) {
-  const t = now - shatter.start;
+  const t = since(shatter.start, now);
   const { x, y, reach, shards } = shatter;
   const strobe = Math.floor(t / 45);
   const flying = t > SHATTER_HOLD_MS;
@@ -960,14 +1028,14 @@ function shrinkGiant() {
 // ---- Main loop ----
 
 function tick(now) {
-  const seconds = Math.min((now - lastTime) / 1000, MAX_FRAME_SECONDS);
+  const seconds = Math.max(0, Math.min((now - lastTime) / 1000, MAX_FRAME_SECONDS));
   lastTime = now;
   if (mode === "play") {
     if (jackpot) advanceJackpot(seconds);
     for (const logo of logos) moveLogo(logo, seconds);
     if (jackpot && jackpot.logos.size === 0) jackpotFinale();
   }
-  if (giant?.moving) moveGiant(now);
+  if (giant?.leg) moveGiant(now);
   renderAura(now, seconds);
   renderEffects(now, seconds);
   requestAnimationFrame(tick);
@@ -1106,11 +1174,30 @@ function playChargeSound() {
   }
 }
 
-function playFirstCornerSound() {
+function playBounceCornerSound() {
   if (!sounds) return;
-  playThump(2.5);
-  playSound(sounds.giantImpact, { gain: 1 });
-  playSound(sounds.giantImpact, { delay: 0.04, gain: 0.8, rate: 0.6 });
+  playThump(2.2);
+  playSound(sounds.giantImpact, { gain: 0.9 });
+  lastCheer = pickDifferent(sounds.cheers.length, lastCheer);
+  playSound(sounds.cheers[lastCheer], { delay: 0.05, gain: 0.7 });
+}
+
+// The rumble comes back while the giant winds up in the middle, and cuts out
+// as it starts its crawl.
+function playWindUpSound() {
+  if (!sounds) return;
+  const now = audio.currentTime;
+  const seconds = WINDUP_MS / 1000;
+  const rumble = audio.createOscillator();
+  const level = audio.createGain();
+  rumble.type = "sawtooth";
+  rumble.frequency.setValueAtTime(50, now);
+  rumble.frequency.exponentialRampToValueAtTime(220, now + seconds);
+  level.gain.setValueAtTime(0.001, now);
+  level.gain.exponentialRampToValueAtTime(0.25, now + seconds);
+  rumble.connect(level).connect(audio.destination);
+  rumble.start(now);
+  rumble.stop(now + seconds);
 }
 
 function playFireSound() {

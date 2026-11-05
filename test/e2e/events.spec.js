@@ -42,7 +42,7 @@ test("jackpot: every logo hits a corner in the same frame", async ({ page }) => 
   await expect(page.locator("#banner-text")).toHaveText("Jackpot");
 });
 
-test("too many logos: the player jams, a ki blast fires a giant logo into two corners, then it resets", async ({ page }) => {
+test("too many logos: jam, ki blast, the giant bounces all four corners, stops, crawls into a fifth, then resets", async ({ page }) => {
   const errors = await openPage(page);
   for (let i = 0; i < 48; i++) await page.mouse.click(100 + ((i * 37) % 1000), 100 + ((i * 53) % 500));
   expect((await readState(page)).mode).toBe("play");
@@ -70,16 +70,22 @@ test("too many logos: the player jams, a ki blast fires a giant logo into two co
   await expect(page.locator(".logo")).toHaveCount(1);
   const giantWidth = await page.locator(".logo").evaluate((element) => element.getBoundingClientRect().width);
   expect(giantWidth).toBeGreaterThan(500);
-  // First corner: it counts, and the giant ricochets toward the opposite one.
-  await sampleUntil(page, (s) => s.mode === "ricochet", { maxMs: 1000 });
-  expect((await readState(page)).corners).toBe(corners + 1);
-  const firstCorner = await page.locator(".logo").evaluate((element) => element.getBoundingClientRect());
-  // Second corner: it counts again, diagonally across the screen.
-  await sampleUntil(page, (s) => s.mode === "landing", { maxMs: 2000 });
-  expect((await readState(page)).corners).toBe(corners + 2);
-  const secondCorner = await page.locator(".logo").evaluate((element) => element.getBoundingClientRect());
-  expect(Math.abs(secondCorner.x - firstCorner.x)).toBeGreaterThan(300);
-  expect(Math.abs(secondCorner.y - firstCorner.y)).toBeGreaterThan(200);
+  // It bounces around all four corners, each one counted, then stops dead
+  // in the middle to wind up.
+  await sampleUntil(page, (s) => s.mode === "windup", { maxMs: 5000 });
+  expect((await readState(page)).corners).toBe(corners + 4);
+  const middle = await page.locator(".logo").evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  });
+  expect(Math.abs(middle.x - 640)).toBeLessThan(40);
+  expect(Math.abs(middle.y - 360)).toBeLessThan(40);
+
+  // Then it crawls slowly into one last corner: the fifth hit.
+  await sampleUntil(page, (s) => s.mode === "crawl", { maxMs: 2000 });
+  const crawl = await sampleUntil(page, (s) => s.mode === "landing", { maxMs: 4000 });
+  expect(crawl.length * 16).toBeGreaterThan(1500); // slowly
+  expect((await readState(page)).corners).toBe(corners + 5);
 
   // The shatter runs its course, and the giant shrinks back into a normal
   // logo in that corner. Its shrink is a CSS animation, which runs on real
@@ -91,5 +97,25 @@ test("too many logos: the player jams, a ki blast fires a giant logo into two co
   expect(atCorner(reset.logos[0], reset.bounds, 30)).toBe(true);
   await page.clock.runFor(500);
   expect(atCorner((await readState(page)).logos[0], reset.bounds)).toBe(false); // and it keeps going
+  expect(errors).toEqual([]);
+});
+
+// The fake clock hands requestAnimationFrame the same time as performance.now(),
+// which hid a crash that only happened on a real clock. This runs the whole
+// meltdown in real time, once, and fails on any page error.
+test("the whole meltdown runs on a real clock without errors", async ({ page }) => {
+  test.setTimeout(30_000);
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/?test");
+  await expect(page.locator(".logo")).toHaveCount(1);
+  await page.evaluate(() => {
+    for (let i = 0; i < 49; i++) {
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { clientX: 80 + ((i * 97) % 1100), clientY: 80 + ((i * 61) % 560), bubbles: true }));
+    }
+  });
+  expect(await page.evaluate(() => window.nothingButCorners.mode)).toBe("jam");
+  await page.waitForFunction(() => window.nothingButCorners.mode === "play", null, { timeout: 20_000 });
+  expect(await page.evaluate(() => window.nothingButCorners.corners)).toBeGreaterThanOrEqual(5);
   expect(errors).toEqual([]);
 });
