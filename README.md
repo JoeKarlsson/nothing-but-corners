@@ -9,9 +9,9 @@ https://joekarlsson.github.io/nothing-but-corners/
 
 ## Recording (November 2026)
 
-[![Colored DVD logos bouncing around a black screen, and each time one lands in a corner the screen flashes and confetti bursts out of it](.github/readme/2026-11-recording.webp)](.github/readme/2026-11-recording.mp4)
+![Colored DVD logos bouncing around a black screen, and each time one lands in a corner the screen flashes and confetti bursts out of it](.github/readme/2026-11-recording.gif)
 
-What DVD Screensaver looked like in November 2026, recorded for [its page on joekarlsson.com](https://www.joekarlsson.com/work/nothing-but-corners/). Click the picture to play the video.
+What DVD Screensaver looked like in November 2026, recorded for [its page on joekarlsson.com](https://www.joekarlsson.com/work/nothing-but-corners/). The full-quality video is [2026-11-recording.mp4](.github/readme/2026-11-recording.mp4).
 
 ## How it always hits
 
