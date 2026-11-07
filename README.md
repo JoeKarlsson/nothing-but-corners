@@ -7,6 +7,12 @@ https://joekarlsson.github.io/nothing-but-corners/
 - Click anywhere to add another logo.
 - `S` or the speaker icon for sound, `F` or the corners icon for full screen.
 
+## Recording (November 2026)
+
+[![Colored DVD logos bouncing around a black screen, and each time one lands in a corner the screen flashes and confetti bursts out of it](.github/readme/2026-11-recording.webp)](.github/readme/2026-11-recording.mp4)
+
+What DVD Screensaver looked like in November 2026, recorded for [its page on joekarlsson.com](https://www.joekarlsson.com/work/nothing-but-corners/). Click the picture to play the video.
+
 ## How it always hits
 
 Mirror the screen across its walls and a bouncing path becomes a straight line. In that unfolded plane every corner is a grid point `(m·W, n·H)`. Aim at one with `gcd(m, n) = 1` and the logo bounces off a few walls, passes no other corner, and lands dead in one. Runs whose wall bounces come within a quarter screen of a corner are thrown out, so there are no near misses (`path.js`). The brake-in and ricochet-out timing lives in `motion.js`.
