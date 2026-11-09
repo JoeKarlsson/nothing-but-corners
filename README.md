@@ -5,11 +5,11 @@
 
 ![Colored DVD logos bouncing around a black screen, and each time one lands in a corner the screen flashes and confetti bursts out of it](.github/readme/2026-11-recording.gif)
 
-Everybody has watched the DVD screensaver and waited for the logo to hit the
-corner. Nothing But Corners aims every bounce, so the logo lands in a corner
+Everybody has watched the DVD screensaver, and whole rooms of people ended up
+watching the logo drift toward a corner and groaning when it missed by a few
+pixels. Nothing But Corners aims every bounce, so the logo lands in a corner
 every single time. Click and you get another logo, then another, until the
-screen fills up with logos landing in corners, and with the sound on every
-corner gets a cheer.
+screen is full of logos hitting corners and every corner gets a cheer.
 
 [Watch it](https://joekarlsson.github.io/nothing-but-corners/) ·
 [Read the full statement](https://www.joekarlsson.com/work/nothing-but-corners/)
