@@ -1,6 +1,6 @@
 # Nothing But Corners
 
-[![Website](https://img.shields.io/badge/website-joekarlsson.github.io%2Fnothing--but--corners-ff4fd8)](https://joekarlsson.github.io/nothing-but-corners/)
+[![Website](https://img.shields.io/badge/website-corners.joekarlsson.com-ff4fd8)](https://corners.joekarlsson.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ![Colored DVD logos bouncing around a black screen, and each time one lands in a corner the screen flashes and confetti bursts out of it](.github/readme/2026-11-recording.gif)
@@ -11,7 +11,7 @@ pixels. Nothing But Corners aims every bounce, so the logo lands in a corner
 every single time. Click and you get another logo, then another, until the
 screen is full of logos hitting corners and every corner gets a cheer.
 
-[Watch it](https://joekarlsson.github.io/nothing-but-corners/) ·
+[Watch it](https://corners.joekarlsson.com/) ·
 [Read the full statement](https://www.joekarlsson.com/work/nothing-but-corners/)
 
 ## Quick start
