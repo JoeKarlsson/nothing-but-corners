@@ -1,39 +1,58 @@
 # Nothing But Corners
 
-The DVD screensaver with the boring parts taken out. It hits the corner every time.
+[![Website](https://img.shields.io/badge/website-joekarlsson.github.io%2Fnothing--but--corners-ff4fd8)](https://joekarlsson.github.io/nothing-but-corners/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-https://joekarlsson.github.io/nothing-but-corners/
-
-- Click anywhere to add another logo.
-- `S` or the speaker icon for sound, `F` or the corners icon for full screen.
-
-## Recording (November 2026)
+The DVD screensaver with the boring parts taken out: the logo hits the corner
+every time. This repo is the whole thing, plain HTML and JavaScript with no build
+step, live at
+[joekarlsson.github.io/nothing-but-corners](https://joekarlsson.github.io/nothing-but-corners/).
+Click to add another logo, `S` for sound, `F` for full screen.
 
 ![Colored DVD logos bouncing around a black screen, and each time one lands in a corner the screen flashes and confetti bursts out of it](.github/readme/2026-11-recording.gif)
 
-What DVD Screensaver looked like in November 2026, recorded for [its page on joekarlsson.com](https://www.joekarlsson.com/work/nothing-but-corners/). The full-quality video is [2026-11-recording.mp4](.github/readme/2026-11-recording.mp4).
-
 ## Artist statement
 
-Everybody has watched the DVD screensaver, and nobody made it for anyone to watch. I aim every bounce, so the logo lands in a corner every single time. Mine hits every time, so after about a minute I get bored of it.
+Everybody has watched the DVD screensaver, and nobody made it for anyone to
+watch. I aim every bounce, so the logo lands in a corner every single time. Mine
+hits every time, so after about a minute I get bored of it.
 
-[Read the full statement](https://www.joekarlsson.com/work/nothing-but-corners/). It's also on the site's [about page](https://joekarlsson.github.io/nothing-but-corners/about.html).
+[Read the full statement](https://www.joekarlsson.com/work/nothing-but-corners/).
 
-## How it always hits
+## Quick start
 
-Mirror the screen across its walls and a bouncing path becomes a straight line. In that unfolded plane every corner is a grid point `(m·W, n·H)`. Aim at one with `gcd(m, n) = 1` and the logo bounces off a few walls, passes no other corner, and lands dead in one. Runs whose wall bounces come within a quarter screen of a corner are thrown out, so there are no near misses (`path.js`). The brake-in and ricochet-out timing lives in `motion.js`.
+The page uses ES modules, so serve it rather than opening the file.
 
-## Tests
-
+```sh
+git clone https://github.com/JoeKarlsson/nothing-but-corners.git
+cd nothing-but-corners
+python3 -m http.server 4173   # http://localhost:4173
 ```
+
+## Development
+
+```sh
 npm install
 npm test            # unit tests, then browser tests
 npm run test:unit   # path and timing logic (node:test)
-npm run test:e2e    # every feature in Chrome (Playwright, on a fake clock)
+npm run test:e2e    # Playwright in your installed Chrome, on a fake clock
 ```
 
-The browser tests use your installed Chrome and open the page with `?test`, which exposes a read-only `window.nothingButCorners` handle.
+The aiming is in `path.js`: mirror the screen across its walls and a bouncing
+path becomes a straight line to a grid point `(m·W, n·H)` with
+`gcd(m, n) = 1`. Paths whose bounces come within a quarter screen of a corner
+are thrown out. The brake-in and ricochet-out timing lives in `motion.js`. The
+browser tests open the page with `?test`, which exposes a read-only
+`window.nothingButCorners` handle.
 
-## Sounds
+GitHub Pages serves `main`, so a push to `main` is a deploy.
 
-Short cuts from Joe's sound effects library, including these from Freesound: #563845 by disarmenemyships, #875405 by assetsmith, #834162 by jw_audio, #402451 by plasterbrain, #131930 by mcpable, #512389 by kievinay.
+## Credits
+
+Sounds are short cuts from my sound effects library, including these from
+Freesound: #563845 by disarmenemyships, #875405 by assetsmith, #834162 by
+jw_audio, #402451 by plasterbrain, #131930 by mcpable, #512389 by kievinay.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
