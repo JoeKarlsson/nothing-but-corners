@@ -3,21 +3,16 @@
 [![Website](https://img.shields.io/badge/website-joekarlsson.github.io%2Fnothing--but--corners-ff4fd8)](https://joekarlsson.github.io/nothing-but-corners/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-The DVD screensaver with the boring parts taken out: the logo hits the corner
-every time. This repo is the whole thing, plain HTML and JavaScript with no build
-step, live at
-[joekarlsson.github.io/nothing-but-corners](https://joekarlsson.github.io/nothing-but-corners/).
-Click to add another logo, `S` for sound, `F` for full screen.
-
 ![Colored DVD logos bouncing around a black screen, and each time one lands in a corner the screen flashes and confetti bursts out of it](.github/readme/2026-11-recording.gif)
 
-## Artist statement
+Everybody has watched the DVD screensaver and waited for the logo to hit the
+corner. Nothing But Corners aims every bounce, so the logo lands in a corner
+every single time. Click and you get another logo, then another, until the
+screen fills up with logos landing in corners, and with the sound on every
+corner gets a cheer.
 
-Everybody has watched the DVD screensaver, and nobody made it for anyone to
-watch. I aim every bounce, so the logo lands in a corner every single time. Mine
-hits every time, so after about a minute I get bored of it.
-
-[Read the full statement](https://www.joekarlsson.com/work/nothing-but-corners/).
+[Watch it](https://joekarlsson.github.io/nothing-but-corners/) ·
+[Read the full statement](https://www.joekarlsson.com/work/nothing-but-corners/)
 
 ## Quick start
 
