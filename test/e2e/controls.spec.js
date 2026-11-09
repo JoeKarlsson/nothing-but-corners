@@ -62,7 +62,7 @@ test("the about button opens the artist statement without dropping a logo", asyn
   await page.locator("#about").click();
   await expect(page).toHaveURL(/about\.html$/);
   await expect(page.getByRole("heading", { name: "Artist statement" })).toBeVisible();
-  await expect(page.getByText("so after about a minute I get bored of it")).toBeVisible();
+  await expect(page.getByText("Mine has nothing to wait for, and every logo hits")).toBeVisible();
   await page.goBack();
   await expect.poll(() => page.locator(".logo").count()).toBe(before);
 });
