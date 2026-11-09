@@ -55,3 +55,14 @@ test("the controls show for a while on arrival, hide when idle and come back on 
   await expect(page.locator("body")).not.toHaveClass(/idle/);
   await expect(page.locator("#sound")).toBeVisible();
 });
+
+test("the about button opens the artist statement without dropping a logo", async ({ page }) => {
+  await openPage(page);
+  const before = await page.locator(".logo").count();
+  await page.locator("#about").click();
+  await expect(page).toHaveURL(/about\.html$/);
+  await expect(page.getByRole("heading", { name: "Artist statement" })).toBeVisible();
+  await expect(page.getByText("so after about a minute I get bored of it")).toBeVisible();
+  await page.goBack();
+  await expect.poll(() => page.locator(".logo").count()).toBe(before);
+});

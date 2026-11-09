@@ -13,6 +13,12 @@ https://joekarlsson.github.io/nothing-but-corners/
 
 What DVD Screensaver looked like in November 2026, recorded for [its page on joekarlsson.com](https://www.joekarlsson.com/work/nothing-but-corners/). The full-quality video is [2026-11-recording.mp4](.github/readme/2026-11-recording.mp4).
 
+## Artist statement
+
+Everybody has watched the DVD screensaver, and nobody made it for anyone to watch. I aim every bounce, so the logo lands in a corner every single time. Mine hits every time, so after about a minute I get bored of it.
+
+[Read the full statement](https://www.joekarlsson.com/work/nothing-but-corners/). It's also on the site's [about page](https://joekarlsson.github.io/nothing-but-corners/about.html).
+
 ## How it always hits
 
 Mirror the screen across its walls and a bouncing path becomes a straight line. In that unfolded plane every corner is a grid point `(m·W, n·H)`. Aim at one with `gcd(m, n) = 1` and the logo bounces off a few walls, passes no other corner, and lands dead in one. Runs whose wall bounces come within a quarter screen of a corner are thrown out, so there are no near misses (`path.js`). The brake-in and ricochet-out timing lives in `motion.js`.

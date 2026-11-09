@@ -67,7 +67,8 @@
   #count { display: inline-block; transform-origin: left center; }
   #controls { display: flex; gap: 12px; }
   body.idle #controls { visibility: hidden; }
-  #controls button {
+  #controls button,
+  #controls a {
     display: grid;
     place-items: center;
     width: 40px;
@@ -80,6 +81,7 @@
   }
   #controls button[hidden] { display: none; }
   #controls svg { width: 24px; height: 24px; }
+  #controls a:focus-visible,
   #controls button:focus-visible { outline: 2px solid var(--osd); outline-offset: 2px; }
 </style>
 </head>
@@ -116,6 +118,11 @@
         <path d="M3 9h4l5-4v14l-5-4H3z"/><path class="icon-detail" d="M16 9l5 6M21 9l-5 6"/>
       </svg>
     </button>
+    <a id="about" href="about.html" aria-label="About Nothing But Corners" title="About">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>
+      </svg>
+    </a>
     <button id="fullscreen" type="button" aria-label="Full screen" title="Full screen (F)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path class="icon-detail" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>
@@ -1112,12 +1119,19 @@ addEventListener("resize", () => {
 
 // Every click drops in another logo, centered on the pointer.
 addEventListener("pointerdown", (event) => {
-  if (event.target.closest("button") || mode !== "play") return;
+  if (event.target.closest("button, a") || mode !== "play") return;
   const x = Math.min(Math.max(event.clientX - logoWidth / 2, 0), width);
   const y = Math.min(Math.max(event.clientY - logoHeight / 2, 0), height);
   popIn(addLogo(x, y).svg);
   if (logos.length >= OVERLOAD_LOGOS) startJam();
 });
+
+// Embedded in another page, the about page opens in a new tab instead of replacing the screensaver
+if (window.self !== window.top) {
+  const aboutLink = document.getElementById("about");
+  aboutLink.target = "_blank";
+  aboutLink.rel = "noopener";
+}
 
 // ---- Sound ----
 
