@@ -84,7 +84,7 @@
   #controls a:focus-visible,
   #controls button:focus-visible { outline: 2px solid var(--osd); outline-offset: 2px; }
 </style>
-<script src="analytics.js?v=829559b7" defer></script>
+<script src="analytics.js?v=e42cda98" defer></script>
 </head>
 <body>
 <svg width="0" height="0" style="position: absolute" aria-hidden="true">
@@ -288,8 +288,18 @@ function draw(logo) {
   if (logo.trail.length > 12) logo.trail.shift();
 }
 
+// Each milestone is sent once per visit, the first time the count reaches it.
+const CORNER_MILESTONES = [10, 50, 100];
+const milestonesSent = new Set();
+
 function updateCount() {
   countLabel.textContent = corners === 1 ? "1 corner" : `${corners} corners`;
+  for (const milestone of CORNER_MILESTONES) {
+    if (corners >= milestone && !milestonesSent.has(milestone)) {
+      milestonesSent.add(milestone);
+      window.plausible("Corners Reached", { props: { count: String(milestone) } });
+    }
+  }
   if (!reduceMotion) {
     countLabel.animate([{ transform: "scale(1.6)" }, { transform: "scale(1)" }], { duration: 420, easing: "ease-out" });
   }
@@ -546,6 +556,7 @@ function jackpotFinale() {
 
 function startJam() {
   mode = "jam";
+  window.plausible("Overload");
   jackpot = null;
   playJamSound();
   // Scratched disc: every logo skips back and forth between recent frames.
@@ -1119,11 +1130,16 @@ addEventListener("resize", () => {
 });
 
 // Every click drops in another logo, centered on the pointer.
+let logoAddedSent = false;
 addEventListener("pointerdown", (event) => {
   if (event.target.closest("button, a") || mode !== "play") return;
   const x = Math.min(Math.max(event.clientX - logoWidth / 2, 0), width);
   const y = Math.min(Math.max(event.clientY - logoHeight / 2, 0), height);
   popIn(addLogo(x, y).svg);
+  if (!logoAddedSent) {
+    logoAddedSent = true;
+    window.plausible("Logo Added");
+  }
   if (logos.length >= OVERLOAD_LOGOS) startJam();
 });
 
@@ -1163,6 +1179,7 @@ soundButton.addEventListener("click", async () => {
   soundButton.querySelector(".icon-detail").setAttribute("d", soundOn ? SOUND_ICONS.on : SOUND_ICONS.off);
   soundButton.setAttribute("aria-label", soundOn ? "Turn sound off" : "Turn sound on");
   if (!soundOn) return;
+  window.plausible("Sound On");
   audio ??= new AudioContext();
   await audio.resume();
   sounds ??= await loadSounds();
@@ -1313,9 +1330,11 @@ const FULLSCREEN_ICONS = {
 };
 
 fullscreenButton.hidden = !document.fullscreenEnabled;
-fullscreenButton.addEventListener("click", () => {
-  if (document.fullscreenElement) document.exitFullscreen();
-  else document.documentElement.requestFullscreen();
+fullscreenButton.addEventListener("click", async () => {
+  if (document.fullscreenElement) return document.exitFullscreen();
+  // Counted only once the browser grants it.
+  await document.documentElement.requestFullscreen();
+  window.plausible("Full Screen");
 });
 document.addEventListener("fullscreenchange", () => {
   const full = Boolean(document.fullscreenElement);
