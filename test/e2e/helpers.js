@@ -11,11 +11,13 @@ export async function openPage(page, { reducedMotion = false } = {}) {
     if (message.type() === "error" && !message.text().includes("favicon")) errors.push(message.text());
   });
   if (reducedMotion) await page.emulateMedia({ reducedMotion: "reduce" });
+  // Pause before the page loads, so its time never flows on its own: only
+  // runFor moves it. Pausing after load raced the page's real-time clock and
+  // threw "Cannot fast-forward to the past" under load.
   await page.clock.install({ time: 0 });
+  await page.clock.pauseAt(0);
   await page.goto("/?test");
   await expect(page.locator(".logo")).toHaveCount(1);
-  // Stop time flowing on its own: from here, only runFor moves it.
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 100));
   return errors;
 }
 
