@@ -46,3 +46,17 @@ test("the 404 page sends 404 with the missing path", async ({ page }) => {
   await page.goto("/404.html");
   expect(await events(page)).toEqual([["404", { path: "/404.html" }]]);
 });
+
+test("the toy still works when a blocker stops analytics.js from loading", async ({ browser }) => {
+  // A fresh context without the recorder above, so window.plausible is never defined.
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.route("**/analytics.js*", (route) => route.abort());
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await openPage(page);
+  await page.mouse.click(640, 360);
+  expect(await page.evaluate(() => typeof window.plausible)).toBe("undefined");
+  expect(errors).toEqual([]);
+  await context.close();
+});

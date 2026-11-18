@@ -297,7 +297,7 @@ function updateCount() {
   for (const milestone of CORNER_MILESTONES) {
     if (corners >= milestone && !milestonesSent.has(milestone)) {
       milestonesSent.add(milestone);
-      window.plausible("Corners Reached", { props: { count: String(milestone) } });
+      window.plausible?.("Corners Reached", { props: { count: String(milestone) } });
     }
   }
   if (!reduceMotion) {
@@ -556,7 +556,7 @@ function jackpotFinale() {
 
 function startJam() {
   mode = "jam";
-  window.plausible("Overload");
+  window.plausible?.("Overload");
   jackpot = null;
   playJamSound();
   // Scratched disc: every logo skips back and forth between recent frames.
@@ -1138,7 +1138,7 @@ addEventListener("pointerdown", (event) => {
   popIn(addLogo(x, y).svg);
   if (!logoAddedSent) {
     logoAddedSent = true;
-    window.plausible("Logo Added");
+    window.plausible?.("Logo Added");
   }
   if (logos.length >= OVERLOAD_LOGOS) startJam();
 });
@@ -1179,7 +1179,7 @@ soundButton.addEventListener("click", async () => {
   soundButton.querySelector(".icon-detail").setAttribute("d", soundOn ? SOUND_ICONS.on : SOUND_ICONS.off);
   soundButton.setAttribute("aria-label", soundOn ? "Turn sound off" : "Turn sound on");
   if (!soundOn) return;
-  window.plausible("Sound On");
+  window.plausible?.("Sound On");
   audio ??= new AudioContext();
   await audio.resume();
   sounds ??= await loadSounds();
@@ -1334,7 +1334,7 @@ fullscreenButton.addEventListener("click", async () => {
   if (document.fullscreenElement) return document.exitFullscreen();
   // Counted only once the browser grants it.
   await document.documentElement.requestFullscreen();
-  window.plausible("Full Screen");
+  window.plausible?.("Full Screen");
 });
 document.addEventListener("fullscreenchange", () => {
   const full = Boolean(document.fullscreenElement);
