@@ -15,7 +15,7 @@ test("every static asset the page uses is served", async ({ page, request }) => 
   await openPage(page);
   const sounds = ["cheer-kids", "cheer-kids-yay", "cheer-applause", "cheer-yay", "jam-warble", "jam-stutter",
     "merge-whoosh", "giant-horn", "giant-impact"].map((name) => `/sounds/${name}.mp3`);
-  for (const path of [...sounds, "/favicon.svg", "/og.png", "/path.js", "/motion.js"]) {
+  for (const path of [...sounds, "/favicon.svg", "/og.png", "/path.js", "/motion.js", "/analytics.js"]) {
     expect((await request.get(path)).status(), path).toBe(200);
   }
 });
